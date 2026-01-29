@@ -2,41 +2,38 @@
 name = "example-custom-poa-node"
 version = "0.0.0"
 publish = false
-edition.workspace = true
-license.workspace = true
+edition = "2021"
+license = "MIT"
 description = "A custom POA (Proof of Authority) node implementation using Reth"
 
 [dependencies]
-# Reth core dependencies
-reth-chainspec.workspace = true
-reth-consensus.workspace = true
-reth-ethereum = { workspace = true, features = ["node", "test-utils"] }
-reth-ethereum-forks.workspace = true
-reth-primitives-traits.workspace = true
-reth-execution-types.workspace = true
-reth-network-peers.workspace = true
+# Reth core dependencies (using main branch for latest compatibility)
+reth-chainspec = { git = "https://github.com/paradigmxyz/reth", branch = "main" }
+reth-consensus = { git = "https://github.com/paradigmxyz/reth", branch = "main" }
+reth-ethereum = { git = "https://github.com/paradigmxyz/reth", branch = "main", features = ["node", "test-utils"] }
+reth-ethereum-forks = { git = "https://github.com/paradigmxyz/reth", branch = "main" }
+reth-primitives-traits = { git = "https://github.com/paradigmxyz/reth", branch = "main" }
+reth-execution-types = { git = "https://github.com/paradigmxyz/reth", branch = "main" }
+reth-network-peers = { git = "https://github.com/paradigmxyz/reth", branch = "main" }
+reth-tracing = { git = "https://github.com/paradigmxyz/reth", branch = "main" }
 
-# Alloy dependencies
-alloy-consensus.workspace = true
-alloy-genesis.workspace = true
-alloy-primitives.workspace = true
-alloy-eips.workspace = true
-alloy-signer.workspace = true
-alloy-signer-local.workspace = true
-alloy-rlp.workspace = true
+# Alloy dependencies (let cargo resolve compatible versions)
+alloy-consensus = "1"
+alloy-genesis = "1"
+alloy-primitives = "1"
+alloy-eips = "1"
+alloy-signer = "1"
+alloy-signer-local = "1"
+alloy-rlp = "0.3"
 
 # Async runtime
-tokio.workspace = true
-futures-util.workspace = true
+tokio = { version = "1.41", features = ["full"] }
+futures-util = "0.3"
 
 # Serialization
-serde = { workspace = true, features = ["derive"] }
-serde_json.workspace = true
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 # Utilities
-eyre.workspace = true
-reth-tracing.workspace = true
-thiserror.workspace = true
-
-[lints]
-workspace = true
+eyre = "0.6"
+thiserror = "2"
