@@ -113,8 +113,6 @@ impl PoaChainSpec {
             (EthereumHardfork::Shanghai.boxed(), ForkCondition::Timestamp(0)),
             (EthereumHardfork::Cancun.boxed(), ForkCondition::Timestamp(0)),
             (EthereumHardfork::Prague.boxed(), ForkCondition::Timestamp(0)),
-            // Future hardforks can be added here with specific timestamps
-            // (EthereumHardfork::Osaka.boxed(), ForkCondition::Timestamp(OSAKA_TIMESTAMP)),
         ])
     }
 
