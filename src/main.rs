@@ -88,7 +88,7 @@ async fn main() -> eyre::Result<()> {
     println!("Block period: {} seconds", poa_chain.block_period());
 
     // Set up data directory in the current working directory
-    let datadir = PathBuf::from("custompoanode");
+    let datadir = PathBuf::from("data");
 
     // Configure dev args with interval-based block production (POA style)
     // This makes the node produce blocks at regular intervals, not just when transactions arrive
