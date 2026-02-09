@@ -118,6 +118,59 @@ impl GenesisConfig {
         }
     }
 
+    /// Create a production configuration for Meowchain
+    ///
+    /// - Chain ID: 9323310
+    /// - 5 signers (fault-tolerant: survives 2 offline, needs 3/5 online)
+    /// - 12-second block time
+    /// - 60M gas limit (high throughput for POA)
+    /// - Treasury, operations, and community accounts prefunded
+    /// - "Meowchain" vanity in genesis block
+    pub fn production() -> Self {
+        let signers = dev_accounts().into_iter().take(5).collect::<Vec<_>>();
+
+        // Treasury: 2,500,000 ETH - ecosystem development fund
+        let treasury_balance =
+            U256::from(2_500_000u64) * U256::from(10u64).pow(U256::from(18u64));
+        // Operations: 500,000 ETH - infrastructure and running costs
+        let operations_balance =
+            U256::from(500_000u64) * U256::from(10u64).pow(U256::from(18u64));
+        // Community: 100,000 ETH - faucet, airdrops, grants
+        let community_balance =
+            U256::from(100_000u64) * U256::from(10u64).pow(U256::from(18u64));
+        // Signer gas: 10,000 ETH per signer - for block production gas costs
+        let signer_balance = U256::from(10_000u64) * U256::from(10u64).pow(U256::from(18u64));
+
+        let mut prefunded = BTreeMap::new();
+
+        // Signers get gas money (first 5 accounts)
+        for signer in &signers {
+            prefunded.insert(*signer, signer_balance);
+        }
+
+        // Treasury (account index 5)
+        prefunded.insert(dev_accounts()[5], treasury_balance);
+        // Operations (account index 6)
+        prefunded.insert(dev_accounts()[6], operations_balance);
+        // Community/Faucet (account index 7)
+        prefunded.insert(dev_accounts()[7], community_balance);
+
+        // "Meowchain" as vanity data
+        let mut vanity = [0u8; 32];
+        let tag = b"Meowchain";
+        vanity[..tag.len()].copy_from_slice(tag);
+
+        Self {
+            chain_id: 9323310,
+            gas_limit: 60_000_000, // 60M - high throughput for POA
+            prefunded_accounts: prefunded,
+            signers,
+            block_period: 12, // Production block time
+            epoch: 30000,
+            vanity,
+        }
+    }
+
     /// Builder method to add a prefunded account
     pub fn with_prefunded_account(mut self, address: Address, balance: U256) -> Self {
         self.prefunded_accounts.insert(address, balance);
@@ -240,7 +293,7 @@ pub fn create_genesis(config: GenesisConfig) -> Genesis {
 
     // Build the chain config JSON
     let chain_config = serde_json::json!({
-        "chainId": 9323310,
+        "chainId": config.chain_id,
         "homesteadBlock": 0,
         "eip150Block": 0,
         "eip155Block": 0,
@@ -300,7 +353,7 @@ mod tests {
     fn test_dev_genesis_creation() {
         let genesis = create_dev_genesis();
 
-        // Verify chain ID
+        // Verify chain ID (dev config uses 31337, create_genesis now uses config.chain_id)
         assert_eq!(genesis.config.chain_id, 31337);
 
         // Verify accounts are prefunded
@@ -309,6 +362,27 @@ mod tests {
 
         // Verify extra data contains signers
         assert!(genesis.extra_data.len() >= 32 + 65); // At least vanity + seal
+    }
+
+    #[test]
+    fn test_production_genesis_creation() {
+        let config = GenesisConfig::production();
+        let genesis = create_genesis(config);
+
+        // Verify production chain ID
+        assert_eq!(genesis.config.chain_id, 9323310);
+
+        // Verify: 8 prefunded accounts (5 signers + treasury + ops + community) + 4 system contracts
+        assert_eq!(genesis.alloc.len(), 12);
+
+        // Verify gas limit is 60M
+        assert_eq!(genesis.gas_limit, 60_000_000);
+
+        // Verify extra data has 5 signers: 32 + 5*20 + 65 = 197 bytes
+        assert_eq!(genesis.extra_data.len(), 197);
+
+        // Verify vanity starts with "Meowchain"
+        assert_eq!(&genesis.extra_data[..9], b"Meowchain");
     }
 
     #[test]
@@ -323,6 +397,7 @@ mod tests {
 
         let genesis = create_genesis(config);
 
+        // chain_id bug fixed: create_genesis now uses config.chain_id
         assert_eq!(genesis.config.chain_id, 12345);
         assert!(genesis.alloc.contains_key(&funded));
         assert_eq!(genesis.alloc.get(&funded).unwrap().balance, U256::from(1000));
