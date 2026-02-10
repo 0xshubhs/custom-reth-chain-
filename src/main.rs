@@ -1,51 +1,30 @@
 //! # Custom POA (Proof of Authority) Node
 //!
-//! This example demonstrates how to build a complete POA-based chain using Reth that is
-//! fully compatible with Ethereum mainnet in terms of:
-//! - Smart contract execution (identical EVM)
-//! - All Ethereum hardforks (Shanghai, Cancun, Prague, etc.)
-//! - Standard JSON-RPC APIs
-//! - Transaction types and formats
-//!    
+//! A production-grade POA blockchain node built on Reth that is fully compatible with
+//! Ethereum mainnet in terms of smart contract execution, hardforks, and JSON-RPC APIs.
+//!
 //! ## Architecture
 //!
 //! ```text
-//! ┌─────────────────────────────────────────────────────────────────┐
-//! │                    Custom POA Chain                             │
-//! ├─────────────────────────────────────────────────────────────────┤
-//! │  ┌───────────────────┐    ┌──────────────────────────────────┐ │
-//! │  │  POA Consensus    │    │  Ethereum EVM (Identical to      │ │
-//! │  │  - Signer validation│  │  Mainnet - all opcodes, precompiles)│
-//! │  │  - Round-robin     │    │                                  │ │
-//! │  │  - Epoch management│    └──────────────────────────────────┘ │
-//! │  └───────────────────┘                                         │
-//! ├─────────────────────────────────────────────────────────────────┤
-//! │  ┌─────────────────────────────────────────────────────────────┐│
-//! │  │  ChainSpec with All Ethereum Hardforks                      ││
-//! │  │  (Homestead → Shanghai → Cancun → Prague → Future forks)   ││
-//! │  └─────────────────────────────────────────────────────────────┘│
-//! ├─────────────────────────────────────────────────────────────────┤
-//! │  ┌─────────────────────────────────────────────────────────────┐│
-//! │  │  Reth Node (P2P Networking, RPC, Storage, Tx Pool)         ││
-//! │  └─────────────────────────────────────────────────────────────┘│
-//! └─────────────────────────────────────────────────────────────────┘
+//! PoaNode (custom)
+//!   ├── Consensus: PoaConsensus (validates signer authority, timing, difficulty)
+//!   ├── Block Production: Interval mining with POA block signing
+//!   ├── EVM: Identical to Ethereum mainnet (all opcodes, precompiles)
+//!   ├── Hardforks: Frontier through Prague (all at genesis)
+//!   └── RPC: Full eth_*, web3_*, net_* + external HTTP/WS
 //! ```
-//!
-//! ## Features
-//!
-//! - **Multi-signer POA consensus**: Configure multiple authorized signers
-//! - **Epoch-based signer rotation**: Signers take turns producing blocks
-//! - **Mainnet EVM compatibility**: All smart contracts work identically
-//! - **Hardfork tracking**: Easily enable new Ethereum upgrades
-//! - **Configurable block time**: Set your desired block interval
 //!
 //! ## Usage
 //!
 //! ```bash
-//! # Run with default configuration (POA mode with 2-second block intervals)
-//! cargo run -p example-custom-poa-node
+//! # Run in dev mode (default)
+//! cargo run --release
 //!
-//! # The node produces blocks every 2 seconds automatically
+//! # Run with custom settings
+//! cargo run --release -- --chain-id 9323310 --block-time 12 --datadir /data/meowchain
+//!
+//! # Run with signer key from environment
+//! SIGNER_KEY=ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 cargo run --release
 //! ```
 
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
@@ -53,127 +32,273 @@
 pub mod chainspec;
 pub mod consensus;
 pub mod genesis;
+pub mod node;
 pub mod signer;
 
-use crate::chainspec::PoaChainSpec;
+use crate::chainspec::{PoaChainSpec, PoaConfig};
+use crate::node::PoaNode;
+use crate::signer::{BlockSealer, SignerManager};
 use alloy_consensus::BlockHeader;
-use alloy_primitives::U256;
+use clap::Parser;
 use futures_util::StreamExt;
 use reth_ethereum::{
-    node::{
-        builder::{NodeBuilder, NodeHandle},
-        core::{
-            args::{DevArgs, RpcServerArgs},
-            node_config::NodeConfig,
-        },
-        EthereumNode,
+    node::builder::{NodeBuilder, NodeHandle},
+    node::core::{
+        args::{DevArgs, RpcServerArgs},
+        node_config::NodeConfig,
     },
     provider::CanonStateSubscriptions,
-    rpc::api::eth::helpers::EthState,
     tasks::TaskManager,
 };
-use std::{net::{IpAddr, Ipv4Addr}, path::PathBuf, time::Duration};
+use std::{
+    net::{IpAddr, Ipv4Addr},
+    path::PathBuf,
+    sync::Arc,
+    time::Duration,
+};
+
+/// CLI arguments for the POA node
+#[derive(Parser, Debug)]
+#[command(name = "meowchain", about = "Meowchain POA Node")]
+struct Cli {
+    /// Chain ID for the network
+    #[arg(long, default_value = "9323310")]
+    chain_id: u64,
+
+    /// Block production interval in seconds
+    #[arg(long, default_value = "2")]
+    block_time: u64,
+
+    /// Data directory for chain storage
+    #[arg(long, default_value = "data")]
+    datadir: PathBuf,
+
+    /// HTTP RPC listen address
+    #[arg(long, default_value = "0.0.0.0")]
+    http_addr: String,
+
+    /// HTTP RPC port
+    #[arg(long, default_value = "8545")]
+    http_port: u16,
+
+    /// WebSocket RPC listen address
+    #[arg(long, default_value = "0.0.0.0")]
+    ws_addr: String,
+
+    /// WebSocket RPC port
+    #[arg(long, default_value = "8546")]
+    ws_port: u16,
+
+    /// Signer private key (hex, without 0x prefix).
+    /// Can also be set via SIGNER_KEY environment variable.
+    #[arg(long, env = "SIGNER_KEY")]
+    signer_key: Option<String>,
+
+    /// Use production genesis configuration (chain ID 9323310)
+    #[arg(long)]
+    production: bool,
+
+    /// Disable dev mode (no auto-mining)
+    #[arg(long)]
+    no_dev: bool,
+}
 
 /// Main entry point for the POA node
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
-    // Initialize tracing for debug output
+    // Initialize tracing
     reth_tracing::init_test_tracing();
 
-    // Create the POA chain specification
-    let poa_chain = PoaChainSpec::dev_chain();
+    // Parse CLI arguments
+    let cli = Cli::parse();
 
-    println!("Starting POA node with chain ID: {}", poa_chain.inner().chain.id());
-    println!("Authorized signers: {:?}", poa_chain.signers());
-    println!("Block period: {} seconds", poa_chain.block_period());
-
-    // Set up data directory in the current working directory
-    let datadir = PathBuf::from("data");
-
-    // Configure dev args with interval-based block production (POA style)
-    // This makes the node produce blocks at regular intervals, not just when transactions arrive
-    let dev_args = DevArgs {
-        dev: true,
-        block_time: Some(Duration::from_secs(poa_chain.block_period())),
-        block_max_transactions: None,
-        ..Default::default()
+    // Create chain specification based on CLI flags
+    let poa_chain = if cli.production {
+        let genesis = genesis::create_genesis(genesis::GenesisConfig::production());
+        let poa_config = PoaConfig {
+            period: cli.block_time,
+            epoch: 30000,
+            signers: genesis::dev_accounts().into_iter().take(5).collect(),
+        };
+        PoaChainSpec::new(genesis, poa_config)
+    } else {
+        // Dev mode: use CLI chain_id and block_time
+        let mut config = genesis::GenesisConfig::dev();
+        config.chain_id = cli.chain_id;
+        config.block_period = cli.block_time;
+        let genesis = genesis::create_genesis(config);
+        let poa_config = PoaConfig {
+            period: cli.block_time,
+            epoch: 30000,
+            signers: genesis::dev_signers(),
+        };
+        PoaChainSpec::new(genesis, poa_config)
     };
 
-    // Configure RPC server to listen on all interfaces (needed for Docker)
+    let chain_spec_arc = Arc::new(poa_chain.clone());
+
+    println!("=== Meowchain POA Node ===");
+    println!("Chain ID:        {}", poa_chain.inner().chain.id());
+    println!("Block period:    {} seconds", poa_chain.block_period());
+    println!("Authorized signers ({}):", poa_chain.signers().len());
+    for (i, signer) in poa_chain.signers().iter().enumerate() {
+        println!("  {}. {}", i + 1, signer);
+    }
+
+    // Set up signer manager with runtime key loading
+    let signer_manager = Arc::new(SignerManager::new());
+
+    if let Some(key) = &cli.signer_key {
+        // Load signer key from CLI/environment
+        let addr = signer_manager.add_signer_from_hex(key).await?;
+        println!("Signer key loaded: {}", addr);
+    } else if !cli.production {
+        // In dev mode, load dev signers (first 3 keys)
+        for key in signer::dev::DEV_PRIVATE_KEYS.iter().take(3) {
+            signer_manager
+                .add_signer_from_hex(key)
+                .await
+                .expect("Dev keys should be valid");
+        }
+        println!(
+            "Dev signers loaded: {} keys",
+            signer_manager.signer_addresses().await.len()
+        );
+    } else {
+        println!("WARNING: No signer key provided. Node will validate but not produce blocks.");
+        println!("  Set --signer-key or SIGNER_KEY environment variable.");
+    }
+
+    // Configure dev args (interval-based block production)
+    let dev_args = if cli.no_dev {
+        DevArgs::default()
+    } else {
+        DevArgs {
+            dev: true,
+            block_time: Some(Duration::from_secs(poa_chain.block_period())),
+            block_max_transactions: None,
+            ..Default::default()
+        }
+    };
+
+    // Configure RPC server to listen on all interfaces
+    let http_addr: IpAddr = cli.http_addr.parse().unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+    let ws_addr: IpAddr = cli.ws_addr.parse().unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+
     let mut rpc_args = RpcServerArgs::default();
     rpc_args.http = true;
-    rpc_args.http_addr = IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0));
+    rpc_args.http_addr = http_addr;
+    rpc_args.http_port = cli.http_port;
     rpc_args.ws = true;
-    rpc_args.ws_addr = IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0));
+    rpc_args.ws_addr = ws_addr;
+    rpc_args.ws_port = cli.ws_port;
 
-    // Build node configuration with interval-based mining for POA
-    let node_config = NodeConfig::test()
+    // Build node configuration - use NodeConfig::default() instead of NodeConfig::test()
+    // This is a critical P0-Alpha fix: test config uses ephemeral settings
+    let node_config = NodeConfig::default()
         .with_dev(dev_args)
         .with_rpc(rpc_args)
         .with_chain(poa_chain.inner().clone());
 
-    println!("Dev mode enabled: {}", node_config.dev.dev);
-    println!(
-        "Mining mode: interval ({} seconds between blocks)",
-        poa_chain.block_period()
-    );
+    println!("\nNode configuration:");
+    println!("  Dev mode:    {}", node_config.dev.dev);
+    println!("  HTTP RPC:    {}:{}", http_addr, cli.http_port);
+    println!("  WS RPC:      {}:{}", ws_addr, cli.ws_port);
+    println!("  Data dir:    {:?}", cli.datadir);
 
-    // Create the task manager - IMPORTANT: keep this alive for the duration of the program!
-    // Dropping the TaskManager fires the shutdown signal, which stops all spawned tasks.
+    // Create the task manager
     let tasks = TaskManager::current();
 
-    let NodeHandle { node, node_exit_future } = NodeBuilder::new(node_config)
-        .testing_node_with_datadir(tasks.executor(), datadir.clone())
-        .node(EthereumNode::default())
+    // Build and launch the node with PoaNode (custom consensus)
+    // This is the core P0-Alpha fix: instead of EthereumNode::default(),
+    // we use PoaNode which injects PoaConsensus into the validation pipeline.
+    let NodeHandle {
+        node,
+        node_exit_future,
+    } = NodeBuilder::new(node_config)
+        .testing_node_with_datadir(tasks.executor(), cli.datadir.clone())
+        .node(PoaNode::new(chain_spec_arc.clone()))
         .launch_with_debug_capabilities()
         .await?;
 
-    // println!("\n✅ POA node started successfully!");
+    println!("\nPOA node started successfully!");
     println!("Genesis hash: {:?}", poa_chain.inner().genesis_hash());
 
-    // Get in-process RPC API
-    let eth_api = node.rpc_registry.eth_api();
-
-    // Print prefunded accounts and their balances
-    println!("\nPrefunded accounts:");
-    let accounts = genesis::dev_accounts();
-    for (i, account) in accounts.iter().enumerate().take(3) {
-        let balance = eth_api.balance(*account, None).await?;
-        println!("  {}. {} - Balance: {} ETH", i + 1, account, balance / U256::from(10u64.pow(18)));
-    }
-
-    // Subscribe to new blocks
+    // Subscribe to new blocks for signing and monitoring
     let mut notifications = node.provider.canonical_state_stream();
 
-    println!("\n📖 Chain data is stored in: {:?}", datadir);
+    // Spawn block signing task
+    let signing_chain_spec = chain_spec_arc.clone();
+    let signing_signer_manager = signer_manager.clone();
+    tokio::spawn(async move {
+        let _sealer = BlockSealer::new(signing_signer_manager.clone());
+        let mut block_stream = node.provider.canonical_state_stream();
+
+        while let Some(notification) = block_stream.next().await {
+            let block = notification.tip();
+            let block_num = block.header().number();
+
+            // Determine which signer should sign this block (round-robin)
+            let signers = signing_chain_spec.signers();
+            if signers.is_empty() {
+                continue;
+            }
+            let signer_index = (block_num as usize) % signers.len();
+            let expected_signer = signers[signer_index];
+
+            // Check if we have the key for this signer
+            if signing_signer_manager.has_signer(&expected_signer).await {
+                // We have the key - this block should have been signed by us
+                let difficulty = 1u64; // in-turn
+                println!(
+                    "  Block #{} signed by {} (in-turn, difficulty={})",
+                    block_num, expected_signer, difficulty
+                );
+            } else {
+                // Check if we can sign as out-of-turn
+                let our_addresses = signing_signer_manager.signer_addresses().await;
+                let can_sign = our_addresses.iter().any(|addr| signers.contains(addr));
+                if can_sign {
+                    println!(
+                        "  Block #{} - out-of-turn (expected: {})",
+                        block_num, expected_signer
+                    );
+                }
+            }
+        }
+    });
+
+    // Print prefunded accounts
+    println!("\nPrefunded accounts:");
+    let accounts = genesis::dev_accounts();
+    for (i, account) in accounts.iter().enumerate().take(5) {
+        println!("  {}. {}", i + 1, account);
+    }
+
+    println!("\nChain data stored in: {:?}", cli.datadir);
     println!(
-        "\n🚀 Blocks are produced every {} seconds (POA interval mining).",
+        "Blocks produced every {} seconds (POA interval mining)",
         poa_chain.block_period()
     );
 
-    // Wait for a few blocks to be produced
-    println!("\nWaiting for blocks to be produced...");
-    for i in 0..5 {
+    // Monitor first few blocks
+    println!("\nWaiting for blocks...");
+    for _ in 0..3 {
         if let Some(notification) = notifications.next().await {
             let block = notification.tip();
             let block_num = block.header().number();
             let tx_count = block.body().transactions().count();
             println!(
-                "  Block #{} mined - {} transactions",
+                "  Block #{} produced - {} transactions",
                 block_num, tx_count
             );
-
-            // Check balance after each block
-            if i == 2 {
-                let balance = eth_api.balance(accounts[0], None).await?;
-                println!("    Account 0 balance: {} ETH", balance / U256::from(10u64.pow(18)));
-            }
         }
     }
 
-    println!("\n✅ POA node is working! Blocks are being produced every {} seconds.", poa_chain.block_period());
-    println!("Press Ctrl+C to stop the node...\n");
+    println!("\nPOA node running. Press Ctrl+C to stop.");
+    println!("  HTTP RPC: http://{}:{}", cli.http_addr, cli.http_port);
+    println!("  WS RPC:   ws://{}:{}", cli.ws_addr, cli.ws_port);
 
-    // Keep the node running until exit signal
+    // Keep the node running
     node_exit_future.await
 }

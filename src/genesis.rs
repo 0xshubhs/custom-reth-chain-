@@ -71,7 +71,7 @@ pub struct GenesisConfig {
 impl Default for GenesisConfig {
     fn default() -> Self {
         Self {
-            chain_id: 31337, // Common local dev chain ID
+            chain_id: 9323310, // Meowchain chain ID
             gas_limit: 30_000_000,
             prefunded_accounts: BTreeMap::new(),
             signers: vec![],
@@ -95,7 +95,7 @@ impl GenesisConfig {
         }
 
         Self {
-            chain_id: 31337,
+            chain_id: 9323310,
             gas_limit: 30_000_000,
             prefunded_accounts: prefunded,
             signers,
@@ -353,8 +353,8 @@ mod tests {
     fn test_dev_genesis_creation() {
         let genesis = create_dev_genesis();
 
-        // Verify chain ID (dev config uses 31337, create_genesis now uses config.chain_id)
-        assert_eq!(genesis.config.chain_id, 31337);
+        // Verify chain ID (dev config uses 9323310, create_genesis now uses config.chain_id)
+        assert_eq!(genesis.config.chain_id, 9323310);
 
         // Verify accounts are prefunded
         assert!(!genesis.alloc.is_empty());

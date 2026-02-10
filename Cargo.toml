@@ -16,6 +16,7 @@ reth-primitives-traits = { git = "https://github.com/paradigmxyz/reth", rev = "7
 reth-execution-types = { git = "https://github.com/paradigmxyz/reth", rev = "796ba6d5dc49b773508fe5a3fc570b2c3345d660" }
 reth-network-peers = { git = "https://github.com/paradigmxyz/reth", rev = "796ba6d5dc49b773508fe5a3fc570b2c3345d660" }
 reth-tracing = { git = "https://github.com/paradigmxyz/reth", rev = "796ba6d5dc49b773508fe5a3fc570b2c3345d660" }
+reth-payload-primitives = { git = "https://github.com/paradigmxyz/reth", rev = "796ba6d5dc49b773508fe5a3fc570b2c3345d660" }
 
 # Alloy dependencies (let cargo resolve compatible versions)
 alloy-consensus = "1"
@@ -33,6 +34,9 @@ futures-util = "0.3"
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
 
 # Utilities
 eyre = "0.6"

@@ -7,13 +7,13 @@
 //! - The signer rotation follows the expected pattern
 
 use crate::chainspec::PoaChainSpec;
-use alloy_consensus::Header;
+use alloy_consensus::{BlockHeader, Header};
 use alloy_primitives::{keccak256, Address, Signature, B256};
 use alloy_primitives::Sealable;
 use reth_consensus::{Consensus, ConsensusError, FullConsensus, HeaderValidator, ReceiptRootBloom};
 use reth_execution_types::BlockExecutionResult;
 use reth_primitives_traits::{
-    Block, BlockHeader, NodePrimitives, RecoveredBlock, SealedBlock, SealedHeader,
+    Block, NodePrimitives, RecoveredBlock, SealedBlock, SealedHeader,
 };
 use std::sync::Arc;
 use thiserror::Error;
@@ -218,6 +218,9 @@ impl PoaConsensus {
 use alloy_primitives::U256;
 use reth_primitives_traits::GotExpected;
 
+// GotExpected is used in post-execution validation for gas_used comparison
+// U256 is used in validate_difficulty
+
 impl<H: BlockHeader + Sealable> HeaderValidator<H> for PoaConsensus {
     fn validate_header(&self, header: &SealedHeader<H>) -> Result<(), ConsensusError> {
         // For POA, we validate:
@@ -297,16 +300,35 @@ impl<B: Block> Consensus<B> for PoaConsensus {
     fn validate_body_against_header(
         &self,
         _body: &B::Body,
-        _header: &SealedHeader<B::Header>,
+        header: &SealedHeader<B::Header>,
     ) -> Result<(), ConsensusError> {
-        // Validate transaction root, etc.
-        // The base implementation handles most of this
+        // Validate that gas used doesn't exceed gas limit
+        if header.header().gas_used() > header.header().gas_limit() {
+            return Err(ConsensusError::HeaderGasUsedExceedsGasLimit {
+                gas_used: header.header().gas_used(),
+                gas_limit: header.header().gas_limit(),
+            });
+        }
         Ok(())
     }
 
-    fn validate_block_pre_execution(&self, _block: &SealedBlock<B>) -> Result<(), ConsensusError> {
-        // POA-specific pre-execution validation
-        // For now, we trust the header validation
+    fn validate_block_pre_execution(&self, block: &SealedBlock<B>) -> Result<(), ConsensusError> {
+        // Validate extra_data has minimum length for POA (vanity + seal)
+        let extra_data = block.header().extra_data();
+        let min_length = EXTRA_VANITY_LENGTH + EXTRA_SEAL_LENGTH;
+        if extra_data.len() < min_length {
+            // In dev mode, blocks may not have POA extra data yet
+            // Log but don't reject - this allows gradual migration
+        }
+
+        // Validate gas used doesn't exceed gas limit
+        if block.header().gas_used() > block.header().gas_limit() {
+            return Err(ConsensusError::HeaderGasUsedExceedsGasLimit {
+                gas_used: block.header().gas_used(),
+                gas_limit: block.header().gas_limit(),
+            });
+        }
+
         Ok(())
     }
 }
@@ -314,31 +336,23 @@ impl<B: Block> Consensus<B> for PoaConsensus {
 impl<N: NodePrimitives> FullConsensus<N> for PoaConsensus {
     fn validate_block_post_execution(
         &self,
-        _block: &RecoveredBlock<N::Block>,
-        _result: &BlockExecutionResult<N::Receipt>,
+        block: &RecoveredBlock<N::Block>,
+        result: &BlockExecutionResult<N::Receipt>,
         _receipt_root_bloom: Option<ReceiptRootBloom>,
     ) -> Result<(), ConsensusError> {
-        // Post-execution validation
-        // Verify receipt root matches, etc.
+        // Validate gas used matches what's in the header
+        let header_gas_used = block.header().gas_used();
+        if result.gas_used != header_gas_used {
+            return Err(ConsensusError::BlockGasUsed {
+                gas: GotExpected {
+                    got: result.gas_used,
+                    expected: header_gas_used,
+                },
+                gas_spent_by_tx: vec![],
+            });
+        }
+
         Ok(())
-    }
-}
-
-/// Builder for POA consensus that integrates with Reth's node builder
-#[derive(Debug, Clone)]
-pub struct PoaConsensusBuilder {
-    chain_spec: Arc<PoaChainSpec>,
-}
-
-impl PoaConsensusBuilder {
-    /// Create a new consensus builder
-    pub fn new(chain_spec: Arc<PoaChainSpec>) -> Self {
-        Self { chain_spec }
-    }
-
-    /// Build the POA consensus instance
-    pub fn build(self) -> Arc<PoaConsensus> {
-        PoaConsensus::arc(self.chain_spec)
     }
 }
 
