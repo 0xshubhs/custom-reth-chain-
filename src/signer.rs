@@ -294,4 +294,139 @@ mod tests {
         let expected_first = crate::genesis::dev_accounts()[0];
         assert!(addresses.contains(&expected_first));
     }
+
+    #[tokio::test]
+    async fn test_remove_signer() {
+        let manager = SignerManager::new();
+        let address = manager
+            .add_signer_from_hex(dev::DEV_PRIVATE_KEYS[0])
+            .await
+            .unwrap();
+
+        assert!(manager.has_signer(&address).await);
+        assert!(manager.remove_signer(&address).await);
+        assert!(!manager.has_signer(&address).await);
+        // Removing again should return false
+        assert!(!manager.remove_signer(&address).await);
+    }
+
+    #[tokio::test]
+    async fn test_sign_hash_nonexistent_address() {
+        let manager = SignerManager::new();
+        let fake_addr: Address = "0x0000000000000000000000000000000000000099".parse().unwrap();
+        let hash = B256::ZERO;
+
+        let result = manager.sign_hash(&fake_addr, hash).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            SignerError::NoSignerForAddress(addr) => assert_eq!(addr, fake_addr),
+            other => panic!("Expected NoSignerForAddress, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_multiple_signers() {
+        let manager = SignerManager::new();
+
+        let addr1 = manager.add_signer_from_hex(dev::DEV_PRIVATE_KEYS[0]).await.unwrap();
+        let addr2 = manager.add_signer_from_hex(dev::DEV_PRIVATE_KEYS[1]).await.unwrap();
+        let addr3 = manager.add_signer_from_hex(dev::DEV_PRIVATE_KEYS[2]).await.unwrap();
+
+        assert_ne!(addr1, addr2);
+        assert_ne!(addr2, addr3);
+        assert_eq!(manager.signer_addresses().await.len(), 3);
+        assert!(manager.has_signer(&addr1).await);
+        assert!(manager.has_signer(&addr2).await);
+        assert!(manager.has_signer(&addr3).await);
+    }
+
+    #[tokio::test]
+    async fn test_add_signer_invalid_key() {
+        let manager = SignerManager::new();
+        let result = manager.add_signer_from_hex("not_a_valid_hex_key").await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            SignerError::InvalidPrivateKey => {}
+            other => panic!("Expected InvalidPrivateKey, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_seal_header_different_signers_produce_different_signatures() {
+        let manager = Arc::new(SignerManager::new());
+        let addr1 = manager.add_signer_from_hex(dev::DEV_PRIVATE_KEYS[0]).await.unwrap();
+        let addr2 = manager.add_signer_from_hex(dev::DEV_PRIVATE_KEYS[1]).await.unwrap();
+
+        let sealer = BlockSealer::new(manager);
+
+        let header = Header {
+            number: 1,
+            gas_limit: 30_000_000,
+            timestamp: 12345,
+            extra_data: vec![0u8; 32 + 65].into(),
+            ..Default::default()
+        };
+
+        let sealed1 = sealer.seal_header(header.clone(), &addr1).await.unwrap();
+        let sealed2 = sealer.seal_header(header, &addr2).await.unwrap();
+
+        // Different signers should produce different signatures
+        assert_ne!(sealed1.extra_data, sealed2.extra_data);
+
+        // But both should verify correctly
+        assert_eq!(BlockSealer::verify_signature(&sealed1).unwrap(), addr1);
+        assert_eq!(BlockSealer::verify_signature(&sealed2).unwrap(), addr2);
+    }
+
+    #[test]
+    fn test_verify_signature_short_extra_data() {
+        let header = Header {
+            extra_data: vec![0u8; 10].into(), // Too short
+            ..Default::default()
+        };
+        let result = BlockSealer::verify_signature(&header);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_signature_to_bytes_roundtrip() {
+        // Create a known signature and round-trip it
+        let mut bytes = [0u8; 65];
+        bytes[0] = 0x01; // r first byte
+        bytes[32] = 0x02; // s first byte
+        bytes[64] = 0x00; // v = 0
+
+        let sig = bytes_to_signature(&bytes);
+        assert!(sig.is_ok());
+        let sig = sig.unwrap();
+
+        let recovered_bytes = signature_to_bytes(&sig);
+        assert_eq!(bytes[64], recovered_bytes[64]); // v should match
+    }
+
+    #[test]
+    fn test_first_dev_signer() {
+        let signer = dev::first_dev_signer();
+        let expected_addr = crate::genesis::dev_accounts()[0];
+        assert_eq!(signer.address(), expected_addr);
+    }
+
+    #[tokio::test]
+    async fn test_add_signer_directly() {
+        let manager = SignerManager::new();
+        let signer = dev::first_dev_signer();
+        let expected_addr = signer.address();
+
+        let addr = manager.add_signer(signer).await;
+        assert_eq!(addr, expected_addr);
+        assert!(manager.has_signer(&addr).await);
+    }
+
+    #[test]
+    fn test_signer_manager_default() {
+        let manager = SignerManager::default();
+        // Default should be empty
+        // Can't check async easily in sync test, but at least it shouldn't panic
+        drop(manager);
+    }
 }

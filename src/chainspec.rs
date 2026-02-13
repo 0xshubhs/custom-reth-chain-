@@ -246,14 +246,51 @@ mod tests {
     }
 
     #[test]
+    fn test_dev_chain_id() {
+        let chain = PoaChainSpec::dev_chain();
+        assert_eq!(chain.inner().chain.id(), 9323310);
+    }
+
+    #[test]
+    fn test_dev_chain_signers_count() {
+        let chain = PoaChainSpec::dev_chain();
+        assert_eq!(chain.signers().len(), 3); // First 3 dev accounts
+    }
+
+    #[test]
+    fn test_dev_chain_epoch() {
+        let chain = PoaChainSpec::dev_chain();
+        assert_eq!(chain.epoch(), 30000);
+    }
+
+    #[test]
     fn test_hardforks_enabled() {
         let chain = PoaChainSpec::dev_chain();
 
         // All major hardforks should be active at block 0
+        assert!(chain.fork(EthereumHardfork::Frontier).active_at_block(0));
+        assert!(chain.fork(EthereumHardfork::Homestead).active_at_block(0));
+        assert!(chain.fork(EthereumHardfork::Byzantium).active_at_block(0));
+        assert!(chain.fork(EthereumHardfork::Constantinople).active_at_block(0));
+        assert!(chain.fork(EthereumHardfork::Istanbul).active_at_block(0));
+        assert!(chain.fork(EthereumHardfork::Berlin).active_at_block(0));
         assert!(chain.fork(EthereumHardfork::London).active_at_block(0));
         assert!(chain.fork(EthereumHardfork::Shanghai).active_at_timestamp(0));
         assert!(chain.fork(EthereumHardfork::Cancun).active_at_timestamp(0));
         assert!(chain.fork(EthereumHardfork::Prague).active_at_timestamp(0));
+    }
+
+    #[test]
+    fn test_authorized_signer_check() {
+        let chain = PoaChainSpec::dev_chain();
+        let signers = chain.signers();
+
+        // First signer should be authorized
+        assert!(chain.is_authorized_signer(&signers[0]));
+
+        // Random address should NOT be authorized
+        let fake: Address = "0x0000000000000000000000000000000000000099".parse().unwrap();
+        assert!(!chain.is_authorized_signer(&fake));
     }
 
     #[test]
@@ -287,5 +324,77 @@ mod tests {
             chain.expected_signer(3),
             Some(&"0x0000000000000000000000000000000000000001".parse().unwrap())
         );
+    }
+
+    #[test]
+    fn test_empty_signers_expected_signer() {
+        let genesis = crate::genesis::create_dev_genesis();
+        let poa_config = PoaConfig {
+            period: 2,
+            epoch: 30000,
+            signers: vec![], // No signers
+        };
+        let chain = PoaChainSpec::new(genesis, poa_config);
+
+        assert_eq!(chain.expected_signer(0), None);
+        assert_eq!(chain.expected_signer(100), None);
+    }
+
+    #[test]
+    fn test_poa_config_default() {
+        let config = PoaConfig::default();
+        assert_eq!(config.period, 12);
+        assert_eq!(config.epoch, 30000);
+        assert!(config.signers.is_empty());
+    }
+
+    #[test]
+    fn test_production_chain_creation() {
+        let genesis = crate::genesis::create_genesis(crate::genesis::GenesisConfig::production());
+        let poa_config = PoaConfig {
+            period: 12,
+            epoch: 30000,
+            signers: crate::genesis::dev_accounts().into_iter().take(5).collect(),
+        };
+        let chain = PoaChainSpec::new(genesis, poa_config);
+
+        assert_eq!(chain.signers().len(), 5);
+        assert_eq!(chain.block_period(), 12);
+        assert_eq!(chain.epoch(), 30000);
+        assert_eq!(chain.inner().chain.id(), 9323310);
+    }
+
+    #[test]
+    fn test_paris_total_difficulty() {
+        let chain = PoaChainSpec::dev_chain();
+        // POA starts post-merge with TTD=0
+        assert_eq!(chain.inner().paris_block_and_final_difficulty, Some((0, U256::ZERO)));
+    }
+
+    #[test]
+    fn test_genesis_hash_deterministic() {
+        let chain1 = PoaChainSpec::dev_chain();
+        let chain2 = PoaChainSpec::dev_chain();
+        assert_eq!(chain1.inner().genesis_hash(), chain2.inner().genesis_hash());
+    }
+
+    #[test]
+    fn test_eth_chain_spec_trait() {
+        let chain = PoaChainSpec::dev_chain();
+        // Test EthChainSpec trait methods
+        assert_eq!(chain.chain().id(), 9323310);
+        assert!(chain.deposit_contract().is_none()); // POA has no deposit contract
+        assert_eq!(chain.prune_delete_limit(), 10000);
+    }
+
+    #[test]
+    fn test_fork_id_and_filter() {
+        let chain = PoaChainSpec::dev_chain();
+        let head = Head { number: 0, timestamp: 0, ..Default::default() };
+
+        // Should not panic
+        let _fork_id = chain.fork_id(&head);
+        let _latest = chain.latest_fork_id();
+        let _filter = chain.fork_filter(head);
     }
 }

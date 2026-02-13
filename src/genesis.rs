@@ -262,6 +262,123 @@ fn system_contract_alloc() -> BTreeMap<Address, GenesisAccount> {
     contracts
 }
 
+/// EIP-1967 Miner Proxy address - block rewards (coinbase) are sent here.
+/// This proxy allows upgrading the reward distribution logic without changing consensus.
+///
+/// Storage layout (EIP-1967):
+/// - Implementation slot: 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc
+/// - Admin slot: 0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103
+pub const MINER_PROXY_ADDRESS: Address = address!("0000000000000000000000000000000000001967");
+
+/// Admin slot for EIP-1967 proxy
+const EIP1967_ADMIN_SLOT: B256 =
+    b256!("b53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103");
+
+/// Returns the EIP-1967 Miner Proxy contract for block reward collection.
+///
+/// This is a minimal proxy that:
+/// - Accepts ETH (block rewards go to coinbase which is this address)
+/// - Delegates all calls to the implementation address stored at EIP-1967 slot
+/// - Admin can upgrade the implementation
+///
+/// Initial implementation is address(0) - just a receiver.
+/// Deploy an implementation contract later to add reward distribution logic.
+fn miner_proxy_alloc(admin: Address) -> BTreeMap<Address, GenesisAccount> {
+    let mut contracts = BTreeMap::new();
+
+    // Minimal EIP-1967 proxy runtime bytecode:
+    // - On receive (no calldata): accept ETH silently (STOP)
+    // - On call: delegatecall to implementation at EIP-1967 slot
+    //
+    // Assembly:
+    //   calldatasize          // cds
+    //   iszero                // cds == 0?
+    //   push1 STOP_DEST      // dest
+    //   jumpi                 // if no calldata, just stop (accept ETH)
+    //   calldatasize          // cds
+    //   push1 0x00            // 0, cds
+    //   push1 0x00            // 0, 0, cds
+    //   calldatacopy          // copy calldata to memory
+    //   push1 0x00            // 0
+    //   push1 0x00            // 0, 0
+    //   calldatasize          // cds, 0, 0
+    //   push1 0x00            // 0, cds, 0, 0
+    //   push32 IMPL_SLOT      // slot, 0, cds, 0, 0
+    //   sload                 // impl, 0, cds, 0, 0
+    //   gas                   // gas, impl, 0, cds, 0, 0
+    //   delegatecall          // success
+    //   returndatasize        // rds, success
+    //   push1 0x00            // 0, rds, success
+    //   push1 0x00            // 0, 0, rds, success
+    //   returndatacopy        // copy return data
+    //   swap1                 // success, ...
+    //   push1 RETURN_DEST     // dest, success
+    //   jumpi                 // if success, jump to return
+    //   returndatasize        // rds
+    //   push1 0x00            // 0, rds
+    //   revert                // revert(0, rds)
+    //   jumpdest              // RETURN_DEST
+    //   returndatasize        // rds
+    //   push1 0x00            // 0, rds
+    //   return                // return(0, rds)
+    //   jumpdest              // STOP_DEST
+    //   stop                  // accept ETH
+    let proxy_bytecode = bytes!(
+        "36"             // calldatasize
+        "15"             // iszero
+        "60" "43"        // push1 0x43 (STOP_DEST)
+        "57"             // jumpi
+        "36"             // calldatasize
+        "60" "00"        // push1 0x00
+        "60" "00"        // push1 0x00
+        "37"             // calldatacopy
+        "60" "00"        // push1 0x00
+        "60" "00"        // push1 0x00
+        "36"             // calldatasize
+        "60" "00"        // push1 0x00
+        "7f"             // push32 (EIP-1967 implementation slot)
+        "360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc"
+        "54"             // sload
+        "5a"             // gas
+        "f4"             // delegatecall
+        "3d"             // returndatasize
+        "60" "00"        // push1 0x00
+        "60" "00"        // push1 0x00
+        "3e"             // returndatacopy
+        "90"             // swap1
+        "60" "3d"        // push1 0x3d (RETURN_DEST)
+        "57"             // jumpi
+        "3d"             // returndatasize
+        "60" "00"        // push1 0x00
+        "fd"             // revert
+        "5b"             // jumpdest (RETURN_DEST = 0x3d)
+        "3d"             // returndatasize
+        "60" "00"        // push1 0x00
+        "f3"             // return
+        "5b"             // jumpdest (STOP_DEST = 0x43)
+        "00"             // stop
+    );
+
+    // Set admin in EIP-1967 admin slot
+    let mut storage = BTreeMap::new();
+    let mut admin_value = [0u8; 32];
+    admin_value[12..32].copy_from_slice(admin.as_slice());
+    storage.insert(EIP1967_ADMIN_SLOT, B256::from(admin_value));
+
+    contracts.insert(
+        MINER_PROXY_ADDRESS,
+        GenesisAccount {
+            balance: U256::ZERO,
+            nonce: Some(1),
+            code: Some(proxy_bytecode.into()),
+            storage: Some(storage),
+            private_key: None,
+        },
+    );
+
+    contracts
+}
+
 /// Returns ERC-4337 Account Abstraction and ecosystem infrastructure contracts.
 /// These are pre-deployed in genesis for immediate availability from block 0.
 ///
@@ -390,6 +507,11 @@ pub fn create_genesis(config: GenesisConfig) -> Genesis {
     // Add ERC-4337 Account Abstraction and infrastructure contracts
     alloc.extend(erc4337_contract_alloc());
 
+    // Add EIP-1967 Miner Proxy for anonymous block reward collection
+    // Admin is set to the first signer (or zero address if no signers)
+    let proxy_admin = config.signers.first().copied().unwrap_or(Address::ZERO);
+    alloc.extend(miner_proxy_alloc(proxy_admin));
+
     // Build the chain config JSON
     let chain_config = serde_json::json!({
         "chainId": config.chain_id,
@@ -423,7 +545,7 @@ pub fn create_genesis(config: GenesisConfig) -> Genesis {
         gas_limit: config.gas_limit,
         difficulty: U256::from(1),
         mix_hash: Default::default(),
-        coinbase: Default::default(),
+        coinbase: MINER_PROXY_ADDRESS,
         alloc,
         number: None,
         parent_hash: None,
@@ -457,7 +579,7 @@ mod tests {
 
         // Verify accounts are prefunded
         assert!(!genesis.alloc.is_empty());
-        assert_eq!(genesis.alloc.len(), 29); // 20 dev accounts + 4 system contracts + 5 ERC-4337/infra
+        assert_eq!(genesis.alloc.len(), 30); // 20 dev accounts + 4 system contracts + 5 ERC-4337/infra + 1 miner proxy
 
         // Verify extra data contains signers
         assert!(genesis.extra_data.len() >= 32 + 65); // At least vanity + seal
@@ -471,8 +593,8 @@ mod tests {
         // Verify production chain ID
         assert_eq!(genesis.config.chain_id, 9323310);
 
-        // Verify: 8 prefunded accounts (5 signers + treasury + ops + community) + 4 system contracts + 5 ERC-4337/infra
-        assert_eq!(genesis.alloc.len(), 17);
+        // Verify: 8 prefunded accounts (5 signers + treasury + ops + community) + 4 system contracts + 5 ERC-4337/infra + 1 miner proxy
+        assert_eq!(genesis.alloc.len(), 18);
 
         // Verify gas limit is 60M
         assert_eq!(genesis.gas_limit, 60_000_000);
@@ -524,6 +646,137 @@ mod tests {
 
         // Extra data should be: 32 (vanity) + 2*20 (signers) + 65 (seal) = 137 bytes
         assert_eq!(genesis.extra_data.len(), 32 + 40 + 65);
+    }
+
+    #[test]
+    fn test_dev_accounts_count() {
+        assert_eq!(dev_accounts().len(), 20);
+    }
+
+    #[test]
+    fn test_dev_signers_count() {
+        assert_eq!(dev_signers().len(), 3);
+    }
+
+    #[test]
+    fn test_dev_signers_are_subset_of_accounts() {
+        let accounts = dev_accounts();
+        let signers = dev_signers();
+        for signer in &signers {
+            assert!(accounts.contains(signer));
+        }
+    }
+
+    #[test]
+    fn test_genesis_base_fee() {
+        let genesis = create_dev_genesis();
+        assert_eq!(genesis.base_fee_per_gas, Some(875_000_000)); // 0.875 gwei
+    }
+
+    #[test]
+    fn test_genesis_blob_support() {
+        let genesis = create_dev_genesis();
+        assert_eq!(genesis.excess_blob_gas, Some(0));
+        assert_eq!(genesis.blob_gas_used, Some(0));
+    }
+
+    #[test]
+    fn test_genesis_difficulty() {
+        let genesis = create_dev_genesis();
+        assert_eq!(genesis.difficulty, U256::from(1));
+    }
+
+    #[test]
+    fn test_default_prefund_balance() {
+        let balance = default_prefund_balance();
+        // 10,000 ETH in wei
+        let expected = U256::from(10_000u64) * U256::from(10u64).pow(U256::from(18u64));
+        assert_eq!(balance, expected);
+    }
+
+    #[test]
+    fn test_system_contracts_have_code() {
+        let genesis = create_dev_genesis();
+
+        // EIP-4788 Beacon Root
+        let contract = genesis.alloc.get(&address!("000F3df6D732807Ef1319fB7B8bB8522d0Beac02"));
+        assert!(contract.is_some());
+        assert!(contract.unwrap().code.is_some());
+        assert!(!contract.unwrap().code.as_ref().unwrap().is_empty());
+
+        // EIP-2935 History Storage
+        let contract = genesis.alloc.get(&address!("0000F90827F1C53a10cb7A02335B175320002935"));
+        assert!(contract.is_some());
+        assert!(contract.unwrap().code.is_some());
+
+        // EIP-7002 Withdrawal Requests
+        let contract = genesis.alloc.get(&address!("00000961Ef480Eb55e80D19ad83579A64c007002"));
+        assert!(contract.is_some());
+        assert!(contract.unwrap().code.is_some());
+
+        // EIP-7251 Consolidation
+        let contract = genesis.alloc.get(&address!("0000BBdDc7CE488642fb579F8B00f3a590007251"));
+        assert!(contract.is_some());
+        assert!(contract.unwrap().code.is_some());
+    }
+
+    #[test]
+    fn test_mainnet_compatible_config() {
+        let signers = vec![
+            address!("0000000000000000000000000000000000000001"),
+            address!("0000000000000000000000000000000000000002"),
+        ];
+        let config = GenesisConfig::mainnet_compatible(12345, signers.clone());
+        assert_eq!(config.chain_id, 12345);
+        assert_eq!(config.gas_limit, 30_000_000);
+        assert_eq!(config.block_period, 12);
+        assert_eq!(config.signers, signers);
+    }
+
+    #[test]
+    fn test_genesis_config_builders() {
+        let config = GenesisConfig::default()
+            .with_chain_id(999)
+            .with_block_period(5)
+            .with_vanity([0xAA; 32]);
+        assert_eq!(config.chain_id, 999);
+        assert_eq!(config.block_period, 5);
+        assert_eq!(config.vanity, [0xAA; 32]);
+    }
+
+    #[test]
+    fn test_regenerate_sample_genesis() {
+        // This test regenerates sample-genesis.json from the actual code
+        let genesis = create_dev_genesis();
+        let json = genesis_to_json(&genesis);
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        // Verify chain ID is correct
+        assert_eq!(parsed["config"]["chainId"], 9323310);
+
+        // Write to file
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("sample-genesis.json");
+        write_genesis_file(&genesis, &path).unwrap();
+    }
+
+    #[test]
+    fn test_miner_proxy_in_genesis() {
+        let genesis = create_dev_genesis();
+
+        // Coinbase should be the miner proxy address
+        assert_eq!(genesis.coinbase, MINER_PROXY_ADDRESS);
+
+        // Miner proxy contract should be in genesis alloc
+        let proxy = genesis.alloc.get(&MINER_PROXY_ADDRESS);
+        assert!(proxy.is_some(), "Miner proxy must be in genesis");
+        let proxy = proxy.unwrap();
+        assert!(proxy.code.is_some(), "Miner proxy must have bytecode");
+        assert_eq!(proxy.nonce, Some(1));
+        assert!(proxy.storage.is_some(), "Miner proxy must have storage (admin slot)");
+
+        // Admin should be first dev signer
+        let storage = proxy.storage.as_ref().unwrap();
+        assert!(storage.contains_key(&EIP1967_ADMIN_SLOT), "Must have EIP-1967 admin slot");
     }
 
     #[test]

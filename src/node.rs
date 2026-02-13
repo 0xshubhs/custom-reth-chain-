@@ -45,12 +45,20 @@ use reth_chainspec::ChainSpec;
 pub struct PoaConsensusBuilder {
     /// The POA chain specification with signer list, epoch, period, etc.
     chain_spec: Arc<PoaChainSpec>,
+    /// Whether to create consensus in dev mode (relaxed validation)
+    dev_mode: bool,
 }
 
 impl PoaConsensusBuilder {
     /// Create a new consensus builder with the given POA chain spec.
     pub fn new(chain_spec: Arc<PoaChainSpec>) -> Self {
-        Self { chain_spec }
+        Self { chain_spec, dev_mode: false }
+    }
+
+    /// Set dev mode on the consensus builder
+    pub fn with_dev_mode(mut self, dev_mode: bool) -> Self {
+        self.dev_mode = dev_mode;
+        self
     }
 }
 
@@ -61,13 +69,17 @@ where
     type Consensus = Arc<PoaConsensus>;
 
     async fn build_consensus(self, _ctx: &BuilderContext<N>) -> eyre::Result<Self::Consensus> {
+        let mode = if self.dev_mode { "dev (relaxed)" } else { "production (strict)" };
         println!(
-            "POA Consensus initialized with {} signers, epoch: {}, period: {}s",
+            "POA Consensus initialized: {} signers, epoch: {}, period: {}s, mode: {}",
             self.chain_spec.signers().len(),
             self.chain_spec.epoch(),
-            self.chain_spec.block_period()
+            self.chain_spec.block_period(),
+            mode,
         );
-        Ok(Arc::new(PoaConsensus::new(self.chain_spec)))
+        Ok(Arc::new(
+            PoaConsensus::new(self.chain_spec).with_dev_mode(self.dev_mode),
+        ))
     }
 }
 
@@ -96,12 +108,20 @@ pub struct PoaNode {
     /// POA chain specification with signer config.
     /// Stored here so it can be passed to the consensus builder.
     chain_spec: Arc<PoaChainSpec>,
+    /// Whether the node runs in dev mode (relaxed consensus validation)
+    dev_mode: bool,
 }
 
 impl PoaNode {
     /// Create a new PoaNode with the given chain specification.
     pub fn new(chain_spec: Arc<PoaChainSpec>) -> Self {
-        Self { chain_spec }
+        Self { chain_spec, dev_mode: false }
+    }
+
+    /// Set dev mode on the node
+    pub fn with_dev_mode(mut self, dev_mode: bool) -> Self {
+        self.dev_mode = dev_mode;
+        self
     }
 }
 
@@ -138,7 +158,9 @@ where
             .executor(EthereumExecutorBuilder::default())
             .payload(BasicPayloadServiceBuilder::default())
             .network(EthereumNetworkBuilder::default())
-            .consensus(PoaConsensusBuilder::new(self.chain_spec.clone()))
+            .consensus(
+                PoaConsensusBuilder::new(self.chain_spec.clone()).with_dev_mode(self.dev_mode),
+            )
     }
 
     fn add_ons(&self) -> Self::AddOns {

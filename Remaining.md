@@ -1,4 +1,6 @@
-### Custom Chain >>> 
+### Meowchain Custom POA Chain - Status Tracker
+
+> **Last audited: 2026-02-13**
 
 ## Table of Contents
 
@@ -13,6 +15,7 @@
 8. [ERC-8004: AI Agent Support](#8-erc-8004-trustless-ai-agents)
 9. [Upcoming Ethereum Upgrades](#9-upcoming-ethereum-upgrades)
 10. [Production Infrastructure Checklist](#10-production-infrastructure-checklist)
+11. [Codebase Issues Found During Audit](#11-codebase-issues-found-during-audit)
 
 ---
 
@@ -22,11 +25,13 @@
 
 | Module | File | Lines | Status |
 |--------|------|-------|--------|
-| Entry point | `main.rs` | ~172 | Working - interval mining, dev mode |
-| Chain spec | `chainspec.rs` | ~292 | Complete - all hardforks, POA config |
-| Consensus | `consensus.rs` | ~371 | Partial - validates but doesn't produce signed blocks |
-| Genesis | `genesis.rs` | ~355 | Working - 20 prefunded accounts, system contracts |
-| Signer | `signer.rs` | ~298 | Working module - NOT integrated with block production |
+| Entry point | `main.rs` | ~304 | Working - CLI parsing, interval mining, dev mode, block monitoring |
+| Node type | `node.rs` | ~175 | Working - PoaNode with PoaConsensusBuilder, DebugNode impl |
+| Chain spec | `chainspec.rs` | ~292 | Complete - all hardforks, POA config, trait impls |
+| Consensus | `consensus.rs` | ~385 | Partial - structural validation works, NO signature verification |
+| Genesis | `genesis.rs` | ~575 | Complete - dev/production configs, system contracts + ERC-4337 pre-deploys |
+| Signer | `signer.rs` | ~298 | Working module - loaded at runtime, NOT in block production pipeline |
+| Bytecodes | `src/bytecodes/` | 10 files | Complete - .bin + .hex for all pre-deployed contracts |
 
 ### Hardforks Enabled (All at Block 0 / Timestamp 0)
 
@@ -47,20 +52,40 @@
 | EIP-7002 | `0x00000961Ef480Eb55e80D19ad83579A64c007002` | Withdrawal requests |
 | EIP-7251 | `0x0000BBdDc7CE488642fb579F8B00f3a590007251` | Consolidation requests |
 
+### ERC-4337 & Infrastructure Contracts in Genesis (NEW)
+
+| Contract | Address | Purpose |
+|----------|---------|---------|
+| EntryPoint v0.7 | `0x0000000071727De22E5E9d8BAf0edAc6f37da032` | ERC-4337 core |
+| WETH9 | `0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2` | Wrapped native token |
+| Multicall3 | `0xcA11bde05977b3631167028862bE2a173976CA11` | Batch RPC calls |
+| CREATE2 Deployer | `0x4e59b44847b379578588920cA78FbF26c0B4956C` | Deterministic deploys |
+| SimpleAccountFactory | `0x9406Cc6185a346906296840746125a0E44976454` | ERC-4337 wallet factory |
+
 ### Infrastructure Done
 
-- [x] Docker multi-stage build (`Dockerfile`, `Dockerfile.dev`)
-- [x] Docker Compose (single node + Scoutup explorer)
+- [x] Docker build (`Dockerfile`)
+- [x] Docker Compose (single node)
+- [x] Blockscout explorer integration (Scoutup Go app in `scoutup/`)
 - [x] MDBX persistent storage (`data/db/`)
 - [x] Static files for headers/txns/receipts
-- [x] JWT secret for Engine API
-- [x] Blockscout explorer integration (Scoutup Go app)
-- [x] Dev mode with 2-second block time
-- [x] 20 prefunded accounts (2,500,000 ETH each)
-- [x] 3 default POA signers (round-robin)
+- [x] Dev mode with configurable block time (default 2s)
+- [x] 20 prefunded accounts (10,000 ETH each in dev, tiered in production)
+- [x] 3 default POA signers (round-robin logic in chainspec)
 - [x] EIP-1559 base fee (0.875 gwei initial)
 - [x] EIP-4844 blob support enabled
 - [x] Basic unit tests in each module
+- [x] CLI argument parsing (clap) - chain-id, block-time, datadir, http/ws config, signer-key
+- [x] External HTTP RPC on 0.0.0.0:8545
+- [x] External WebSocket RPC on 0.0.0.0:8546
+- [x] Runtime signer key loading from CLI `--signer-key` or `SIGNER_KEY` env var
+- [x] Chain ID unified to 9323310 across dev and production genesis configs
+- [x] PoaNode type replacing EthereumNode (injects PoaConsensus into Reth pipeline)
+- [x] PoaConsensusBuilder wired into ComponentsBuilder
+- [x] Production genesis config (5 signers, 60M gas, tiered treasury/ops/community allocation)
+- [x] Genesis extra_data with POA format (vanity + signers + seal)
+- [x] Block monitoring task that logs signer turn info
+- [x] ERC-4337 EntryPoint, WETH9, Multicall3, CREATE2 Deployer pre-deployed at genesis
 
 ---
 
@@ -68,60 +93,48 @@
 
 ### P0 - Must Fix Before Any Deployment
 
-| # | Issue | Details | File |
-|---|-------|---------|------|
-| 1 | **Block signing not integrated** | `signer.rs` exists but is never called during block production. Blocks are produced unsigned via Reth's interval mining. POA consensus is meaningless without actual signatures | `main.rs`, `signer.rs` |
-| 2 | **No external RPC server** | Only in-process RPC available. External clients (MetaMask, wallets, dApps) cannot connect. Docker exposes port 8545 but binary doesn't bind to it | `main.rs` |
-| 3 | **No consensus enforcement on sync** | Blocks received from peers are NOT validated via POA consensus. Network could accept blocks from unauthorized signers | `consensus.rs` |
-| 4 | **Post-execution validation stubbed** | `validate_block_post_execution` returns `Ok(())` - no actual state root or receipt verification | `consensus.rs` |
-| 5 | **Chain ID mismatch** | `GenesisConfig::dev()` uses 31337, `create_genesis()` hardcodes 9323310 in JSON, `sample-genesis.json` uses 123456787654323456, Scoutup config uses 9323310 | Multiple files |
-| 6 | **No CLI argument parsing** | Can't configure ports, genesis file, chain ID, data dir at runtime. Requires recompilation for any config change | `main.rs` |
-| 7 | **Hardcoded dev keys in binary** | 10 private keys in source code. No encrypted keystore, no key rotation | `signer.rs` |
+| # | Issue | Status | Details | File |
+|---|-------|--------|---------|------|
+| 1 | **Block signing not integrated** | PARTIALLY FIXED | `SignerManager` is instantiated, loaded from CLI/env, and a block monitoring task is spawned. Blocks are produced unsigned by Reth's default payload builder. Block rewards go to EIP-1967 miner proxy at `0x...1967`. | `main.rs`, `signer.rs`, `genesis.rs` |
+| 2 | **No external RPC server** | FIXED | HTTP RPC on `0.0.0.0:8545` and WS on `0.0.0.0:8546` configured via `RpcServerArgs`. | `main.rs:189-199` |
+| 3 | **No consensus enforcement on sync** | FIXED | `PoaConsensus` validates headers with POA signature recovery in production mode. Dev mode skips signature checks. `recover_signer()` called in `validate_header()`. | `consensus.rs:249-287` |
+| 4 | **Post-execution validation stubbed** | FIXED | Validates `gas_used`, receipt root, and logs bloom against pre-computed values. | `consensus.rs:393-429` |
+| 5 | **Chain ID mismatch** | FIXED | All configs use 9323310. `sample-genesis.json` regenerated from code with correct chain ID, all contracts. | `genesis.rs`, `sample-genesis.json` |
+| 6 | **No CLI argument parsing** | FIXED | Full `clap` CLI with all flags. | `main.rs:62-105` |
+| 7 | **Hardcoded dev keys in binary** | PARTIALLY FIXED | Production loads from `--signer-key` / `SIGNER_KEY`. Dev keys still hardcoded for dev mode. | `main.rs:156-175`, `signer.rs:205-216` |
 
-### P0-ALPHA - Fundamental Architecture Problems (The Node Is Fake)
+### P0-ALPHA - Fundamental Architecture Problems
 
-> These are deeper than bugs. The node **pretends** to be POA but is actually just a vanilla Ethereum dev-mode node with POA code sitting unused next to it.
+> **Progress update (2026-02-13):** The node uses production `NodeBuilder` with persistent MDBX database. PoaConsensus validates signatures in production mode. EIP-1967 miner proxy collects block rewards. 70 tests pass.
 
-| # | Issue | What the code does | What it should do |
-|---|-------|--------------------|-------------------|
-| A1 | **`NodeConfig::test()` used** | `main.rs:103` creates a TEST node config (ephemeral, no real networking) | Must use `NodeConfig::default()` with proper production settings |
-| A2 | **`testing_node_with_datadir()` used** | `main.rs:119` builds a TESTING node, not a real one | Must use `.node(PoaNode)` with custom components (see below) |
-| A3 | **`EthereumNode::default()` used** | `main.rs:121` runs a stock Ethereum node. POA consensus is NEVER plugged in | Must create a custom `PoaNode` that injects `PoaConsensus` into the pipeline |
-| A4 | **No custom PayloadBuilder** | Blocks are built by Reth's default builder - no signatures, no signer rotation, no difficulty setting, no extra_data manipulation | Must implement `PayloadBuilder` that: picks in-turn signer, builds block, signs it, sets difficulty 1 or 2, embeds signer list at epoch blocks |
-| A5 | **Consensus module is dead code** | `PoaConsensus` is never instantiated by the running node. `PoaConsensusBuilder` is never called. All validation functions are library code that nothing calls | Must register `PoaConsensus` as the node's consensus engine via Reth's component system |
-| A6 | **Signer module is dead code** | `SignerManager` and `BlockSealer` exist but `main.rs` never imports or uses them | Must integrate into the block production loop |
+| # | Issue | Status | What the code does now | What still needs to happen |
+|---|-------|--------|------------------------|---------------------------|
+| A1 | **`NodeConfig::test()` used** | FIXED | `NodeConfig::default()` with `.with_dev()`, `.with_rpc()`, `.with_chain()`, `.with_datadir_args()` | Done |
+| A2 | **`testing_node_with_datadir()` used** | FIXED | Production `NodeBuilder::new(config).with_database(init_db()).with_launch_context(executor)` with persistent MDBX | Done |
+| A3 | **`EthereumNode::default()` used** | FIXED | `.node(PoaNode::new(chain_spec).with_dev_mode(is_dev_mode))` injects `PoaConsensus` | Done |
+| A4 | **No custom PayloadBuilder** | NOT FIXED | Still uses `BasicPayloadServiceBuilder::default()` wrapping `EthereumPayloadBuilder`. No signing, no difficulty field, no epoch signer list in produced blocks | Must implement `PoaPayloadBuilder` |
+| A5 | **Consensus module is dead code** | FIXED | `PoaConsensus` LIVE in pipeline with signature verification | Done |
+| A6 | **Signer module is dead code** | PARTIALLY FIXED | `SignerManager` loaded with keys, used in monitoring. `BlockSealer` exists but not in payload pipeline | Need `PoaPayloadBuilder` integration |
 
-**In plain English:** Right now if you run this node, Reth produces unsigned blocks using its default Ethereum logic. The 5 modules (`consensus.rs`, `signer.rs`, `chainspec.rs`, `genesis.rs`) are a **library that nothing calls**. The node works only because dev-mode doesn't validate anything.
-
-**What the architecture needs to look like:**
+**Current architecture (2026-02-13):**
 
 ```
-Current (broken):
-  main.rs -> NodeConfig::test() -> EthereumNode::default() -> Reth dev mining
-  consensus.rs (unused)
-  signer.rs (unused)
-
-Required:
-  main.rs -> NodeConfig::default() + CLI args
-    -> PoaNode (custom)
+What we have now:
+  main.rs -> NodeConfig::default() + CLI args (clap)
+    -> Production NodeBuilder with persistent MDBX database
+    -> PoaNode (custom node type, dev_mode flag)
       -> Components:
-        consensus:      PoaConsensus (from consensus.rs)
-        payload_builder: PoaPayloadBuilder (NEW - signs blocks)
-        network:        configured P2P with bootnodes
-        pool:           standard tx pool
-      -> Block production loop:
-        1. Check if it's our turn (round-robin)
-        2. Build payload from tx pool
-        3. Sign block header with our signer key
-        4. Set difficulty (1=in-turn, 2=out-of-turn)
-        5. At epoch blocks, embed full signer list in extra_data
-        6. Broadcast signed block to peers
-      -> Block import pipeline:
-        1. Receive block from peer
-        2. PoaConsensus.validate_header() - verify signature
-        3. PoaConsensus.validate_signer() - check authorization
-        4. PoaConsensus.validate_block_post_execution() - verify state root
-        5. Accept or reject
+        consensus:       PoaConsensus (LIVE - signature verification, timing, gas, receipt root)
+        payload_builder: EthereumPayloadBuilder (DEFAULT - no signing)
+        network:         EthereumNetworkBuilder (DEFAULT)
+        pool:            EthereumPoolBuilder (DEFAULT)
+      -> Block rewards: go to EIP-1967 miner proxy (0x...1967)
+      -> Block production: Reth dev mining (unsigned blocks)
+      -> SignerManager: loaded with keys, ready for integration
+
+What still needs to happen:
+  1. Implement PoaPayloadBuilder (signs blocks, sets difficulty, epoch signers)
+  2. Wire BlockSealer into the payload building pipeline
 ```
 
 ### P1 - Required for Production
@@ -237,22 +250,22 @@ meowchain run \
   --mine  # Enable block production
 ```
 
-### What's Missing for Multi-Node (ALL of this needs to be built)
+### What's Missing for Multi-Node
 
 | Component | Status | What's Needed |
 |-----------|--------|---------------|
 | **`meowchain init` command** | Not implemented | CLI subcommand to initialize DB from genesis.json |
-| **`meowchain run` command** | Not implemented | CLI with all flags (bootnodes, ports, signer, http, ws) |
+| **`meowchain run` command** | Partially done | CLI exists with `--datadir`, `--http-*`, `--ws-*`, `--signer-key` flags. Missing: `--bootnodes`, `--port`, `--mine`, `--unlock` |
 | **`meowchain account` command** | Not implemented | Import/export/list signing keys |
-| **Genesis file distribution** | Not implemented | Canonical genesis.json that all nodes share |
+| **Genesis file distribution** | Partially done | `genesis.rs` can generate canonical JSON via `genesis_to_json()` and `write_genesis_file()`. `sample-genesis.json` is STALE (wrong chain ID, missing contracts) - needs regeneration |
 | **Bootnode infrastructure** | Not implemented | At least 2-3 bootnodes with static IPs/DNS |
 | **Enode URL generation** | Not implemented | Each node needs a public enode URL for peering |
 | **State sync protocol** | Not implemented | Full sync from genesis + fast sync from snapshots |
-| **Signer key isolation** | Not implemented | Signing key loaded at runtime, not compiled in |
-| **Block production scheduling** | Not implemented | Round-robin turn detection + in-turn/out-of-turn logic |
+| **Signer key isolation** | DONE | `--signer-key` CLI flag and `SIGNER_KEY` env var. In production mode, runs as non-signer if no key provided. Dev keys only loaded in dev mode. |
+| **Block production scheduling** | Partially done | Round-robin logic exists in `chainspec.rs:expected_signer()`. Monitoring task detects in-turn/out-of-turn. But NOT enforced in block building. |
 | **Fork choice rule** | Not implemented | Heaviest chain wins (sum of difficulties). In-turn blocks (diff=1) preferred over out-of-turn (diff=2) |
 | **Signer voting** | Not implemented | `clique_propose(address, true/false)` to add/remove signers |
-| **Epoch checkpoints** | Not implemented | Every 30000 blocks, embed full signer list in extra_data |
+| **Epoch checkpoints** | Partially done | `is_epoch_block()` and `extract_signers_from_epoch_block()` exist in `consensus.rs`. Genesis extra_data includes signers. But NOT embedded during block production at epoch boundaries. |
 
 ### State Management When Multiple Nodes Run
 
@@ -332,14 +345,15 @@ Since there's no beacon chain overhead, POA can scale differently:
 
 ### RPC Server
 
-- [ ] HTTP JSON-RPC on port 8545
-- [ ] WebSocket JSON-RPC on port 8546
-- [ ] `eth_*` namespace (full)
+- [x] HTTP JSON-RPC on port 8545 (configurable via `--http-addr` / `--http-port`)
+- [x] WebSocket JSON-RPC on port 8546 (configurable via `--ws-addr` / `--ws-port`)
+- [x] `eth_*` namespace (provided by Reth's default EthereumEthApiBuilder)
+- [x] `web3_*` namespace (provided by Reth)
+- [x] `net_*` namespace (provided by Reth)
 - [ ] `admin_*` namespace (addPeer, removePeer, nodeInfo)
 - [ ] `debug_*` namespace (traceTransaction, traceBlock)
 - [ ] `txpool_*` namespace (content, status, inspect)
-- [ ] `web3_*` namespace (clientVersion, sha3)
-- [ ] `clique_*` namespace (getSigners, propose, discard) - POA specific
+- [ ] `clique_*` namespace (getSigners, propose, discard) - POA specific (NEEDS CUSTOM IMPL)
 - [ ] CORS configuration
 - [ ] Rate limiting
 - [ ] API key authentication
@@ -639,7 +653,7 @@ pub struct HardforkSchedule {
 
 | ERC | Name | Status on Meowchain | Notes |
 |-----|------|---------------------|-------|
-| ERC-4337 | Account Abstraction (Alt Mempool) | Needs EntryPoint deployment | Deploy EntryPoint contract + Bundler service |
+| ERC-4337 | Account Abstraction (Alt Mempool) | EntryPoint v0.7 PRE-DEPLOYED in genesis | `0x0000000071727De22E5E9d8BAf0edAc6f37da032`. Still needs Bundler service. |
 | EIP-7702 | EOA Account Code | Supported (Prague active) | Type 0x04 tx enabled at genesis |
 | ERC-7579 | Modular Smart Accounts | Needs contract deployment | Plugin architecture for smart wallets |
 | ERC-1271 | Contract Signature Validation | Supported (EVM native) | `isValidSignature()` |
@@ -675,12 +689,13 @@ pub struct HardforkSchedule {
 
 ```
 Priority 1 (Essential):
-  - [ ] ERC-4337 EntryPoint contract (v0.7+)
-  - [ ] ERC-4337 Bundler service
+  - [x] ERC-4337 EntryPoint contract (v0.7) -- PRE-DEPLOYED IN GENESIS at 0x0000000071727De22E5E9d8BAf0edAc6f37da032
+  - [ ] ERC-4337 Bundler service (off-chain component, not a contract)
   - [ ] ERC-4337 Paymaster contracts (for gasless tx)
-  - [ ] WETH (Wrapped ETH) contract
-  - [ ] Multicall3 contract (batch reads)
-  - [ ] CREATE2 Deployer (deterministic addresses)
+  - [x] WETH (Wrapped ETH) contract -- PRE-DEPLOYED IN GENESIS at 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2
+  - [x] Multicall3 contract (batch reads) -- PRE-DEPLOYED IN GENESIS at 0xcA11bde05977b3631167028862bE2a173976CA11
+  - [x] CREATE2 Deployer (deterministic addresses) -- PRE-DEPLOYED IN GENESIS at 0x4e59b44847b379578588920cA78FbF26c0B4956C
+  - [x] SimpleAccountFactory (ERC-4337 wallet factory) -- PRE-DEPLOYED IN GENESIS at 0x9406Cc6185a346906296840746125a0E44976454
   - [ ] ERC-1820 Registry
 
 Priority 2 (Ecosystem Growth):
@@ -874,8 +889,8 @@ Deploy:
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| MetaMask support | Blocked | Needs external RPC first |
-| WalletConnect | Not done | Needs RPC + chain registry |
+| MetaMask support | UNBLOCKED | External RPC on 0.0.0.0:8545 is live. MetaMask can connect via `Add Network` with chain ID 9323310. Needs testing. |
+| WalletConnect | Not done | Needs chain registry listing |
 | Hardware wallet signing | Not done | Ledger/Trezor for signers |
 | Faucet | Not done | Testnet token distribution |
 
@@ -894,55 +909,93 @@ Deploy:
 ## Priority Execution Order
 
 ```
-Phase 0 - Fix the Foundation (FIRST - nothing else matters without this):
-  0a. Replace NodeConfig::test() with NodeConfig::default()
-  0b. Replace testing_node_with_datadir() with proper node builder
-  0c. Create custom PoaNode type that injects PoaConsensus into Reth pipeline
-  0d. Build PoaPayloadBuilder that signs blocks with signer keys
-  0e. Wire signer.rs into block production (round-robin turn detection)
-  0f. Set difficulty field (1=in-turn, 2=out-of-turn) in produced blocks
-  0g. Embed signer list in extra_data at epoch blocks
-  0h. Verify POA signatures on blocks received from peers
-  -> After this: you have a REAL POA node, not a dev-mode Ethereum node
+Phase 0 - Fix the Foundation:
+  0a. Replace NodeConfig::test() with NodeConfig::default()               -- DONE
+  0b. Replace testing_node_with_datadir() with proper node builder        -- DONE (production NodeBuilder + init_db + MDBX)
+  0c. Create custom PoaNode type that injects PoaConsensus into pipeline  -- DONE (node.rs)
+  0d. Build PoaPayloadBuilder that signs blocks with signer keys          -- NOT DONE (biggest remaining gap)
+  0e. Wire signer.rs into block production (round-robin turn detection)   -- PARTIALLY DONE (monitoring only, not signing)
+  0f. Set difficulty field (1=in-turn, 2=out-of-turn) in produced blocks  -- NOT DONE (requires PoaPayloadBuilder)
+  0g. Embed signer list in extra_data at epoch blocks                     -- NOT DONE (helpers exist, not wired)
+  0h. Verify POA signatures on blocks received from peers                 -- DONE (validate_header calls recover_signer in production)
+  0i. EIP-1967 miner proxy for anonymous block reward collection          -- DONE (coinbase = 0x...1967)
+  -> STATUS: ~70% complete. Node is real, consensus validates signatures, rewards to proxy.
 
-Phase 1 - Make It Connectable (Weeks 1-4):
-  1. Add CLI argument parsing (clap): --genesis, --datadir, --bootnodes, --http, --signer
-  2. Implement `meowchain init --genesis genesis.json` subcommand
-  3. Add external HTTP/WS RPC server (not just in-process)
-  4. Resolve chain ID inconsistencies (pick ONE: 9323310)
-  5. Fix pre-existing test failures
-  6. Generate canonical genesis.json for distribution
+Phase 1 - Make It Connectable:
+  1. Add CLI argument parsing (clap)                                      -- DONE
+  2. Implement `meowchain init --genesis genesis.json` subcommand         -- NOT DONE
+  3. Add external HTTP/WS RPC server                                      -- DONE
+  4. Resolve chain ID inconsistencies (pick ONE: 9323310)                 -- DONE (all fixed including sample-genesis.json)
+  5. Fix pre-existing test failures                                       -- DONE (70 tests passing)
+  6. Generate canonical genesis.json for distribution                     -- DONE (auto-regenerated from code)
+  -> STATUS: ~85% complete.
 
-Phase 2 - Make It Multi-Node (Weeks 5-8):
-  7. Set up 2-3 bootnodes with static enode URLs
-  8. Test 3-signer network (3 machines, each with one key)
-  9. Implement state sync (full sync from genesis for new joiners)
-  10. Implement fork choice rule (heaviest chain / most in-turn blocks)
-  11. Key management: load signer key from file at runtime (not hardcoded)
-  12. Integration test: multi-node block production + validation
+Phase 2 - Make It Multi-Node:
+  7. Set up 2-3 bootnodes with static enode URLs                          -- NOT DONE
+  8. Test 3-signer network (3 machines, each with one key)                -- NOT DONE
+  9. Implement state sync (full sync from genesis for new joiners)        -- NOT DONE
+  10. Implement fork choice rule (heaviest chain / most in-turn blocks)   -- NOT DONE
+  11. Key management: load signer key from file at runtime                -- DONE (--signer-key / SIGNER_KEY)
+  12. Integration test: multi-node block production + validation          -- NOT DONE
+  -> STATUS: ~15% complete.
 
-Phase 3 - Make It Production (Weeks 9-16):
-  13. Implement signer voting (clique_propose RPC)
-  14. Add admin/debug/txpool/clique RPC namespaces
-  15. Add Prometheus metrics + Grafana dashboards
-  16. Implement chain recovery tooling (export/import blocks, db repair)
-  17. Implement post-execution validation (state root, receipt root)
-  18. Set up CI/CD pipeline
-  19. Encrypted keystore (EIP-2335 style)
-  20. Security audit
+Phase 3 - Make It Production:
+  13. Implement signer voting (clique_propose RPC)                        -- NOT DONE
+  14. Add admin/debug/txpool/clique RPC namespaces                        -- NOT DONE
+  15. Add Prometheus metrics + Grafana dashboards                         -- NOT DONE
+  16. Implement chain recovery tooling (export/import blocks, db repair)  -- NOT DONE
+  17. Implement post-execution validation (state root, receipt root)      -- DONE (gas_used, receipt root, logs bloom)
+  18. Set up CI/CD pipeline                                               -- NOT DONE
+  19. Encrypted keystore (EIP-2335 style)                                 -- NOT DONE
+  20. Security audit                                                      -- NOT DONE
+  -> STATUS: ~10% complete.
 
-Phase 4 - Make It Ecosystem (Weeks 17+):
-  21. Deploy core contracts (WETH, Multicall3, CREATE2 Deployer, EntryPoint)
-  22. Full Blockscout integration with contract verification
-  23. Bridge to Ethereum mainnet
-  24. Deploy ERC-8004 registries (AI Agent support)
-  25. Oracle integration (Chainlink/Pyth)
-  26. Faucet + developer docs + SDK
-  27. Add Fusaka hardfork support
-  28. Wallet integrations (MetaMask, WalletConnect)
+Phase 4 - Make It Ecosystem:
+  21. Deploy core contracts (WETH, Multicall3, CREATE2, EntryPoint)       -- DONE (pre-deployed in genesis!)
+  22. Full Blockscout integration with contract verification              -- NOT DONE (Scoutup wrapper exists)
+  23. Bridge to Ethereum mainnet                                          -- NOT DONE
+  24. Deploy ERC-8004 registries (AI Agent support)                       -- NOT DONE
+  25. Oracle integration (Chainlink/Pyth)                                 -- NOT DONE
+  26. Faucet + developer docs + SDK                                      -- NOT DONE
+  27. Add Fusaka hardfork support                                         -- NOT DONE
+  28. Wallet integrations (MetaMask, WalletConnect)                       -- UNBLOCKED (RPC exists, needs testing)
+  -> STATUS: ~10% complete.
 ```
 
 ---
 
-*Generated: 2026-02-09 | Meowchain Custom POA on Reth*
+## 11. Codebase Issues Found During Audit
+
+> Issues discovered during the 2026-02-12 code review that need attention.
+
+### Critical Issues
+
+| # | Issue | File | Details |
+|---|-------|------|---------|
+| C1 | **`testing_node_with_datadir()` still used** | ~~`main.rs:219`~~ | **FIXED** - Now uses production `NodeBuilder::new(config).with_database(init_db()).with_launch_context(executor)` with persistent MDBX database. |
+| C2 | **Block monitoring logs but doesn't sign** | `main.rs:244-283` | The spawned task detects which signer should sign each block and logs it, but `BlockSealer.seal_header()` is never called. Requires `PoaPayloadBuilder` integration. |
+| C3 | **`validate_header()` doesn't verify signatures** | ~~`consensus.rs`~~ | **FIXED** - Production mode calls `recover_signer()` and `validate_signer()` to verify block signatures. Dev mode skips (unsigned blocks). |
+| C4 | **`validate_block_pre_execution()` silently allows invalid extra_data** | ~~`consensus.rs`~~ | **FIXED** - Production mode rejects blocks with extra_data shorter than vanity+seal. Dev mode allows (unsigned blocks from Reth dev mining). |
+
+### Non-Critical Issues
+
+| # | Issue | File | Details |
+|---|-------|------|---------|
+| N1 | **`sample-genesis.json` is stale** | ~~`sample-genesis.json`~~ | **FIXED** - Regenerated from code with chain ID 9323310, all 30 alloc entries (20 dev + 4 system + 5 infra + 1 miner proxy). |
+| N2 | **Dockerfile CMD format mismatch** | ~~`Dockerfile`~~ | **FIXED** - CMD uses correct `--http-addr`, `--http-port`, `--ws-addr`, `--ws-port` format. |
+| N3 | **Dockerfile copies wrong binary name** | ~~`Dockerfile`~~ | **FIXED** - Copies `target/release/example-custom-poa-node` and renames to `meowchain`. |
+| N5 | **Production config uses dev account keys** | `genesis.rs:130` | Still uses `dev_accounts()[0..5]` as signers. Real production MUST use unique keys. |
+| N7 | **Double block stream subscription** | ~~`main.rs`~~ | **FIXED** - Single `canonical_state_stream()` subscription. |
+
+### Suggestions for Next Steps
+
+1. **Highest priority:** Implement `PoaPayloadBuilder` - this is the single biggest gap. Without it, blocks are unsigned and the chain is functionally identical to a vanilla Ethereum dev node.
+
+2. **Second priority:** Wire `BlockSealer` into the payload building pipeline for block signing during production.
+
+3. **Third priority:** Encrypted keystore support (EIP-2335) for production signer key management.
+
+---
+
+*Last updated: 2026-02-13 | Meowchain Custom POA on Reth*
 *Tracks: All finalized EIPs through Fusaka + planned Glamsterdam/Hegota*

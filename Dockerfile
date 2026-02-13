@@ -12,8 +12,7 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 # Copy the pre-built binary from local target/release
-COPY target/release/example-custom-poa-node /usr/local/bin/poa-node
-COPY sample-genesis.json ./
+COPY target/release/example-custom-poa-node /usr/local/bin/meowchain
 
 # Create data directory
 RUN mkdir -p /app/data
@@ -25,5 +24,5 @@ EXPOSE 8545 8546 30303 30303/udp 9001
 ENV RUST_LOG=info
 ENV RUST_BACKTRACE=1
 
-# Run the POA node
-CMD ["poa-node", "--datadir", "/app/data", "--http", "--http.addr", "0.0.0.0", "--http.port", "8545", "--http.api", "eth,net,web3,txpool,debug,trace", "--ws", "--ws.addr", "0.0.0.0", "--ws.port", "8546"]
+# Run the POA node with correct CLI flags
+CMD ["meowchain", "--datadir", "/app/data", "--http-addr", "0.0.0.0", "--http-port", "8545", "--ws-addr", "0.0.0.0", "--ws-port", "8546"]

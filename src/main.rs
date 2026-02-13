@@ -37,18 +37,19 @@ pub mod signer;
 
 use crate::chainspec::{PoaChainSpec, PoaConfig};
 use crate::node::PoaNode;
-use crate::signer::{BlockSealer, SignerManager};
+use crate::signer::SignerManager;
 use alloy_consensus::BlockHeader;
 use clap::Parser;
 use futures_util::StreamExt;
+use reth_db::init_db;
 use reth_ethereum::{
     node::builder::{NodeBuilder, NodeHandle},
     node::core::{
-        args::{DevArgs, RpcServerArgs},
+        args::{DatadirArgs, DevArgs, RpcServerArgs},
         node_config::NodeConfig,
     },
     provider::CanonStateSubscriptions,
-    tasks::TaskManager,
+    tasks::TaskExecutor,
 };
 use std::{
     net::{IpAddr, Ipv4Addr},
@@ -112,6 +113,9 @@ async fn main() -> eyre::Result<()> {
     // Parse CLI arguments
     let cli = Cli::parse();
 
+    // Determine if we're in dev mode
+    let is_dev_mode = !cli.no_dev && !cli.production;
+
     // Create chain specification based on CLI flags
     let poa_chain = if cli.production {
         let genesis = genesis::create_genesis(genesis::GenesisConfig::production());
@@ -140,6 +144,7 @@ async fn main() -> eyre::Result<()> {
     println!("=== Meowchain POA Node ===");
     println!("Chain ID:        {}", poa_chain.inner().chain.id());
     println!("Block period:    {} seconds", poa_chain.block_period());
+    println!("Mode:            {}", if is_dev_mode { "dev" } else { "production" });
     println!("Authorized signers ({}):", poa_chain.signers().len());
     for (i, signer) in poa_chain.signers().iter().enumerate() {
         println!("  {}. {}", i + 1, signer);
@@ -152,7 +157,7 @@ async fn main() -> eyre::Result<()> {
         // Load signer key from CLI/environment
         let addr = signer_manager.add_signer_from_hex(key).await?;
         println!("Signer key loaded: {}", addr);
-    } else if !cli.production {
+    } else if is_dev_mode {
         // In dev mode, load dev signers (first 3 keys)
         for key in signer::dev::DEV_PRIVATE_KEYS.iter().take(3) {
             signer_manager
@@ -170,7 +175,7 @@ async fn main() -> eyre::Result<()> {
     }
 
     // Configure dev args (interval-based block production)
-    let dev_args = if cli.no_dev {
+    let dev_args = if !is_dev_mode {
         DevArgs::default()
     } else {
         DevArgs {
@@ -193,75 +198,84 @@ async fn main() -> eyre::Result<()> {
     rpc_args.ws_addr = ws_addr;
     rpc_args.ws_port = cli.ws_port;
 
-    // Build node configuration - use NodeConfig::default() instead of NodeConfig::test()
-    // This is a critical P0-Alpha fix: test config uses ephemeral settings
+    // Build node configuration with proper data directory
     let node_config = NodeConfig::default()
         .with_dev(dev_args)
         .with_rpc(rpc_args)
-        .with_chain(poa_chain.inner().clone());
+        .with_chain(poa_chain.inner().clone())
+        .with_datadir_args(DatadirArgs {
+            datadir: cli.datadir.clone().into(),
+            ..Default::default()
+        });
 
     println!("\nNode configuration:");
-    println!("  Dev mode:    {}", node_config.dev.dev);
+    println!("  Dev mode:    {}", is_dev_mode);
     println!("  HTTP RPC:    {}:{}", http_addr, cli.http_port);
     println!("  WS RPC:      {}:{}", ws_addr, cli.ws_port);
     println!("  Data dir:    {:?}", cli.datadir);
 
-    // Create the task manager
-    let tasks = TaskManager::current();
+    // Create the task executor (attaches to current tokio runtime)
+    let tasks = TaskExecutor::with_existing_handle(tokio::runtime::Handle::current())?;
+
+    // Initialize persistent MDBX database (replaces testing_node_with_datadir)
+    let db_path = cli.datadir.join("db");
+    std::fs::create_dir_all(&db_path)?;
+    let database = Arc::new(init_db(&db_path, Default::default())?);
 
     // Build and launch the node with PoaNode (custom consensus)
-    // This is the core P0-Alpha fix: instead of EthereumNode::default(),
-    // we use PoaNode which injects PoaConsensus into the validation pipeline.
+    // PoaNode injects PoaConsensus into the validation pipeline.
+    // dev_mode controls whether signature verification is enforced.
     let NodeHandle {
         node,
         node_exit_future,
     } = NodeBuilder::new(node_config)
-        .testing_node_with_datadir(tasks.executor(), cli.datadir.clone())
-        .node(PoaNode::new(chain_spec_arc.clone()))
+        .with_database(database)
+        .with_launch_context(tasks)
+        .node(PoaNode::new(chain_spec_arc.clone()).with_dev_mode(is_dev_mode))
         .launch_with_debug_capabilities()
         .await?;
 
     println!("\nPOA node started successfully!");
     println!("Genesis hash: {:?}", poa_chain.inner().genesis_hash());
 
-    // Subscribe to new blocks for signing and monitoring
-    let mut notifications = node.provider.canonical_state_stream();
-
-    // Spawn block signing task
-    let signing_chain_spec = chain_spec_arc.clone();
-    let signing_signer_manager = signer_manager.clone();
+    // Spawn block monitoring task (single subscription)
+    let monitoring_chain_spec = chain_spec_arc.clone();
+    let monitoring_signer_manager = signer_manager.clone();
     tokio::spawn(async move {
-        let _sealer = BlockSealer::new(signing_signer_manager.clone());
         let mut block_stream = node.provider.canonical_state_stream();
 
         while let Some(notification) = block_stream.next().await {
             let block = notification.tip();
             let block_num = block.header().number();
+            let tx_count = block.body().transactions().count();
 
             // Determine which signer should sign this block (round-robin)
-            let signers = signing_chain_spec.signers();
+            let signers = monitoring_chain_spec.signers();
             if signers.is_empty() {
+                println!("  Block #{} produced - {} txs (no signers configured)", block_num, tx_count);
                 continue;
             }
             let signer_index = (block_num as usize) % signers.len();
             let expected_signer = signers[signer_index];
 
-            // Check if we have the key for this signer
-            if signing_signer_manager.has_signer(&expected_signer).await {
-                // We have the key - this block should have been signed by us
-                let difficulty = 1u64; // in-turn
+            // Check if we have the key for the expected signer
+            if monitoring_signer_manager.has_signer(&expected_signer).await {
                 println!(
-                    "  Block #{} signed by {} (in-turn, difficulty={})",
-                    block_num, expected_signer, difficulty
+                    "  Block #{} - {} txs (in-turn: {}, difficulty=1)",
+                    block_num, tx_count, expected_signer
                 );
             } else {
-                // Check if we can sign as out-of-turn
-                let our_addresses = signing_signer_manager.signer_addresses().await;
-                let can_sign = our_addresses.iter().any(|addr| signers.contains(addr));
-                if can_sign {
+                let our_addresses = monitoring_signer_manager.signer_addresses().await;
+                let is_our_turn = our_addresses.iter().any(|addr| signers.contains(addr));
+                if is_our_turn {
                     println!(
-                        "  Block #{} - out-of-turn (expected: {})",
-                        block_num, expected_signer
+                        "  Block #{} - {} txs (out-of-turn, expected: {})",
+                        block_num, tx_count, expected_signer
+                    );
+                } else {
+                    println!(
+                        "  Block #{} - {} txs (expected signer: {})",
+                        block_num, tx_count, expected_signer
                     );
                 }
             }
@@ -280,20 +294,6 @@ async fn main() -> eyre::Result<()> {
         "Blocks produced every {} seconds (POA interval mining)",
         poa_chain.block_period()
     );
-
-    // Monitor first few blocks
-    println!("\nWaiting for blocks...");
-    for _ in 0..3 {
-        if let Some(notification) = notifications.next().await {
-            let block = notification.tip();
-            let block_num = block.header().number();
-            let tx_count = block.body().transactions().count();
-            println!(
-                "  Block #{} produced - {} transactions",
-                block_num, tx_count
-            );
-        }
-    }
 
     println!("\nPOA node running. Press Ctrl+C to stop.");
     println!("  HTTP RPC: http://{}:{}", cli.http_addr, cli.http_port);
