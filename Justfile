@@ -20,6 +20,7 @@ build-debug:
 # Update all dependencies (fetches latest reth commit from main)
 update:
     cargo update
+    rustup update stable
 
 # Run all tests with latest deps
 test:

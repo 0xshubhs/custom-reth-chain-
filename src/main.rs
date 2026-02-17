@@ -33,6 +33,7 @@ pub mod chainspec;
 pub mod consensus;
 pub mod genesis;
 pub mod node;
+pub mod onchain;
 pub mod payload;
 pub mod rpc;
 pub mod signer;
