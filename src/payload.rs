@@ -3,7 +3,7 @@
 //! Wraps Reth's `EthereumPayloadBuilder` to add POA block signing.
 //! After the inner builder constructs a block (transactions, state root, etc.),
 //! we post-process it to:
-//! 1. Set difficulty (1=in-turn, 2=out-of-turn)
+//! 1. Set difficulty = 0 (Engine API compatibility; authority is via ECDSA signature)
 //! 2. Build extra_data with POA format (vanity + [signers at epoch] + signature)
 //! 3. Sign the block header with the appropriate signer key
 
@@ -233,7 +233,7 @@ where
     /// In production mode:
     /// 1. At epoch blocks — refreshes live signer list from on-chain SignerRegistry (Phase 3 item 21)
     /// 2. Determines which signer should sign (round-robin using effective_signers)
-    /// 3. Sets difficulty (1=in-turn, 2=out-of-turn)
+    /// 3. Sets difficulty = 0 (Engine API compatibility)
     /// 4. Builds extra_data with POA format (vanity + [signers at epoch] + signature)
     /// 5. Signs the header via BlockSealer
     /// 6. Reconstructs the sealed block
@@ -281,23 +281,27 @@ where
             None => return Ok(payload),
         };
 
-        // Find a signer we control — use tokio Handle::block_on since we're in spawn_blocking
+        // Find a signer we control.
+        // Use block_in_place + block_on so this works from both spawn_blocking contexts
+        // (dev mode) and async task contexts (production+mining mode).
         let handle = tokio::runtime::Handle::current();
         let signer_manager = self.signer_manager.clone();
 
-        let (signer_addr, is_in_turn) = handle.block_on(async {
-            // Prefer in-turn signer if we have it
-            if signer_manager.has_signer(&in_turn_signer).await {
-                return (in_turn_signer, true);
-            }
-            // Otherwise find any authorized signer we control
-            let our_addrs = signer_manager.signer_addresses().await;
-            for addr in &our_addrs {
-                if signers.contains(addr) {
-                    return (*addr, false);
+        let (signer_addr, is_in_turn) = tokio::task::block_in_place(|| {
+            handle.block_on(async {
+                // Prefer in-turn signer if we have it
+                if signer_manager.has_signer(&in_turn_signer).await {
+                    return (in_turn_signer, true);
                 }
-            }
-            (Address::ZERO, false)
+                // Otherwise find any authorized signer we control
+                let our_addrs = signer_manager.signer_addresses().await;
+                for addr in &our_addrs {
+                    if signers.contains(addr) {
+                        return (*addr, false);
+                    }
+                }
+                (Address::ZERO, false)
+            })
         });
 
         if signer_addr == Address::ZERO {
@@ -309,8 +313,11 @@ where
         let mut header = block.header().clone();
         let body = block.body().clone();
 
-        // Set difficulty: 1 for in-turn, 2 for out-of-turn
-        header.difficulty = if is_in_turn { U256::from(1) } else { U256::from(2) };
+        // Difficulty must be 0 for Engine API compatibility.
+        // The Engine API (ExecutionPayloadV1) has no difficulty field and alloy hardcodes
+        // it to U256::ZERO on conversion, so any non-zero value breaks the hash round-trip.
+        // POA authority is determined solely by the ECDSA signature in extra_data.
+        header.difficulty = U256::ZERO;
 
         // Build extra_data with POA format
         let mut extra_data = Vec::with_capacity(
@@ -335,16 +342,16 @@ where
 
         // Sign the header
         let sealer = BlockSealer::new(self.signer_manager.clone());
-        let signed_header = handle
-            .block_on(async { sealer.seal_header(header, &signer_addr).await })
-            .map_err(|e| PayloadBuilderError::Other(Box::new(e)))?;
+        let signed_header = tokio::task::block_in_place(|| {
+            handle.block_on(async { sealer.seal_header(header, &signer_addr).await })
+        })
+        .map_err(|e| PayloadBuilderError::Other(Box::new(e)))?;
 
         println!(
-            "  POA block #{} signed by {} ({}), difficulty={}",
+            "  POA block #{} signed by {} ({})",
             block_number,
             signer_addr,
             if is_in_turn { "in-turn" } else { "out-of-turn" },
-            if is_in_turn { 1 } else { 2 },
         );
 
         // Reconstruct the sealed block with the signed header

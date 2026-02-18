@@ -75,7 +75,7 @@ pub enum PoaConsensusError {
     },
 
     /// Difficulty field has invalid value for POA
-    #[error("Difficulty must be 1 for in-turn signer or 2 for out-of-turn")]
+    #[error("Difficulty must be 0 (Engine API compatibility; authority is via ECDSA signature)")]
     InvalidDifficulty,
 
     /// Signer list in epoch block is invalid
@@ -183,19 +183,18 @@ impl PoaConsensus {
         block_number % self.chain_spec.epoch() == 0
     }
 
-    /// Validate the difficulty field
-    /// In POA: difficulty 1 = in-turn signer, difficulty 2 = out-of-turn
+    /// Validate the difficulty field.
+    ///
+    /// The Ethereum Engine API (ExecutionPayloadV1) has no difficulty field and alloy
+    /// always sets it to U256::ZERO on block deserialization. For Engine API compatibility,
+    /// all POA blocks must use difficulty = 0. POA authority is determined by the ECDSA
+    /// signature in extra_data, not by difficulty.
     pub fn validate_difficulty(
         &self,
         header: &Header,
-        signer: &Address,
+        _signer: &Address,
     ) -> Result<(), PoaConsensusError> {
-        let expected_signer = self.chain_spec.expected_signer(header.number);
-        let is_in_turn = expected_signer == Some(*signer);
-
-        let expected_difficulty = if is_in_turn { 1u64 } else { 2u64 };
-
-        if header.difficulty != U256::from(expected_difficulty) {
+        if header.difficulty != U256::ZERO {
             return Err(PoaConsensusError::InvalidDifficulty);
         }
 
@@ -871,42 +870,42 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_difficulty_in_turn() {
+    fn test_validate_difficulty_zero() {
         let consensus = production_consensus();
         let signers = consensus.chain_spec.signers().to_vec();
 
-        // Block 0 should be signed by signer[0] (in-turn, difficulty=1)
+        // All POA blocks must have difficulty = 0 (Engine API compatibility)
         let header = Header {
             number: 0,
-            difficulty: U256::from(1),
+            difficulty: U256::ZERO,
             ..Default::default()
         };
         assert!(consensus.validate_difficulty(&header, &signers[0]).is_ok());
     }
 
     #[test]
-    fn test_validate_difficulty_out_of_turn() {
+    fn test_validate_difficulty_zero_any_signer() {
         let consensus = production_consensus();
         let signers = consensus.chain_spec.signers().to_vec();
 
-        // Block 0 is signer[0]'s turn, so signer[1] is out-of-turn (difficulty=2)
+        // difficulty = 0 is valid regardless of which authorized signer signs
         let header = Header {
             number: 0,
-            difficulty: U256::from(2),
+            difficulty: U256::ZERO,
             ..Default::default()
         };
         assert!(consensus.validate_difficulty(&header, &signers[1]).is_ok());
     }
 
     #[test]
-    fn test_validate_difficulty_wrong_value() {
+    fn test_validate_difficulty_nonzero_rejected() {
         let consensus = production_consensus();
         let signers = consensus.chain_spec.signers().to_vec();
 
-        // Block 0 is signer[0]'s turn, difficulty should be 1 not 2
+        // Any non-zero difficulty is invalid (Engine API requires 0)
         let header = Header {
             number: 0,
-            difficulty: U256::from(2),
+            difficulty: U256::from(1),
             ..Default::default()
         };
         assert!(consensus.validate_difficulty(&header, &signers[0]).is_err());

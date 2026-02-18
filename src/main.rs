@@ -115,6 +115,12 @@ struct Cli {
     /// instead of waiting for block-time interval
     #[arg(long)]
     eager_mining: bool,
+
+    /// Force interval-based block production even in production mode.
+    /// Useful for testing: node uses production signing (97-byte extra_data, strict POA)
+    /// but still auto-mines blocks at --block-time interval.
+    #[arg(long)]
+    mining: bool,
 }
 
 /// Main entry point for the POA node
@@ -164,7 +170,12 @@ async fn main() -> eyre::Result<()> {
     println!("=== Meowchain POA Node ===");
     println!("Chain ID:        {}", poa_chain.inner().chain.id());
     println!("Block period:    {} seconds", poa_chain.block_period());
-    println!("Mode:            {}", if is_dev_mode { "dev" } else { "production" });
+    let mode_str = match (is_dev_mode, cli.mining) {
+        (true, _) => "dev",
+        (false, true) => "production+mining",
+        (false, false) => "production",
+    };
+    println!("Mode:            {}", mode_str);
     println!("Authorized signers ({}):", poa_chain.signers().len());
     for (i, signer) in poa_chain.signers().iter().enumerate() {
         println!("  {}. {}", i + 1, signer);
@@ -194,8 +205,10 @@ async fn main() -> eyre::Result<()> {
         println!("  Set --signer-key or SIGNER_KEY environment variable.");
     }
 
-    // Configure dev args (interval-based or eager block production)
-    let dev_args = if !is_dev_mode {
+    // Configure dev args (interval-based or eager block production).
+    // --mining forces auto-mining even in production mode (for testing PoaEngineValidator).
+    let mining_enabled = is_dev_mode || cli.mining;
+    let dev_args = if !mining_enabled {
         DevArgs::default()
     } else {
         DevArgs {
@@ -307,7 +320,7 @@ async fn main() -> eyre::Result<()> {
             // Check if we have the key for the expected signer
             if monitoring_signer_manager.has_signer(&expected_signer).await {
                 println!(
-                    "  Block #{} - {} txs (in-turn: {}, difficulty=1)",
+                    "  Block #{} - {} txs (in-turn: {})",
                     block_num, tx_count, expected_signer
                 );
             } else {
