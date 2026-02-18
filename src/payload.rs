@@ -122,8 +122,14 @@ where
             }
         }
 
-        // Build POA extra_data: 32 vanity bytes + 65 seal bytes (filled during signing)
-        let extra_data = Bytes::from(vec![0u8; EXTRA_VANITY_LENGTH + EXTRA_SEAL_LENGTH]);
+        // In production mode, pre-allocate POA extra_data (vanity + seal placeholder).
+        // In dev mode, leave extra_data empty — blocks are unsigned and Reth's engine
+        // rejects extra_data > 32 bytes (Ethereum mainnet limit).
+        let extra_data = if self.dev_mode {
+            Bytes::new()
+        } else {
+            Bytes::from(vec![0u8; EXTRA_VANITY_LENGTH + EXTRA_SEAL_LENGTH])
+        };
 
         let inner = reth_ethereum_payload_builder::EthereumPayloadBuilder::new(
             ctx.provider().clone(),
