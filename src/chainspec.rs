@@ -15,7 +15,7 @@ use reth_ethereum_forks::EthereumHardfork;
 use reth_network_peers::NodeRecord;
 use reth_primitives_traits::SealedHeader;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 /// POA-specific configuration that extends the standard chain config
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,8 +44,12 @@ impl Default for PoaConfig {
 pub struct PoaChainSpec {
     /// The underlying Ethereum chain spec
     inner: Arc<ChainSpec>,
-    /// POA-specific configuration
+    /// POA-specific configuration (genesis/CLI values — fallback when live cache is empty)
     poa_config: PoaConfig,
+    /// Live signer list from on-chain SignerRegistry, updated at epoch blocks.
+    /// None = not yet synced from chain (falls back to poa_config.signers).
+    /// Arc<RwLock<...>> so Clone shares the same live cache across consensus + payload.
+    live_signers: Arc<RwLock<Option<Vec<Address>>>>,
 }
 
 impl PoaChainSpec {
@@ -69,7 +73,11 @@ impl PoaChainSpec {
             blob_params: Default::default(),
         };
 
-        Self { inner: Arc::new(inner), poa_config }
+        Self {
+            inner: Arc::new(inner),
+            poa_config,
+            live_signers: Arc::new(RwLock::new(None)),
+        }
     }
 
     /// Creates a development POA chain with prefunded accounts
@@ -126,9 +134,37 @@ impl PoaChainSpec {
         &self.poa_config
     }
 
-    /// Returns the list of authorized signers
+    /// Returns the genesis/config signer list (static fallback).
+    /// Prefer `effective_signers()` for production code that should respect live governance.
     pub fn signers(&self) -> &[Address] {
         &self.poa_config.signers
+    }
+
+    /// Returns the effective signer list: live on-chain value if synced, else genesis config.
+    ///
+    /// Updated by `PoaPayloadBuilder` at every epoch block after reading `SignerRegistry`.
+    /// `PoaConsensus` and block production both use this to respect live governance changes.
+    pub fn effective_signers(&self) -> Vec<Address> {
+        self.live_signers
+            .read()
+            .ok()
+            .and_then(|g| g.clone())
+            .unwrap_or_else(|| self.poa_config.signers.clone())
+    }
+
+    /// Update the live signer list from the on-chain SignerRegistry contract.
+    ///
+    /// Called by `PoaPayloadBuilder` at epoch blocks. Shared via `Arc<RwLock>` so
+    /// `PoaConsensus` (which holds the same `Arc<PoaChainSpec>`) immediately sees the update.
+    pub fn update_live_signers(&self, signers: Vec<Address>) {
+        if let Ok(mut guard) = self.live_signers.write() {
+            *guard = Some(signers);
+        }
+    }
+
+    /// Whether the live signer cache has been populated from on-chain data.
+    pub fn has_live_signers(&self) -> bool {
+        self.live_signers.read().ok().and_then(|g| g.as_ref().map(|_| ())).is_some()
     }
 
     /// Returns the block period in seconds
@@ -141,18 +177,22 @@ impl PoaChainSpec {
         self.poa_config.epoch
     }
 
-    /// Check if an address is an authorized signer
+    /// Check if an address is an authorized signer (uses live on-chain list if available).
     pub fn is_authorized_signer(&self, address: &Address) -> bool {
-        self.poa_config.signers.contains(address)
+        self.effective_signers().contains(address)
     }
 
-    /// Get the expected signer for a given block number (round-robin)
-    pub fn expected_signer(&self, block_number: u64) -> Option<&Address> {
-        if self.poa_config.signers.is_empty() {
+    /// Get the expected in-turn signer for a given block number (round-robin).
+    ///
+    /// Uses the effective signer list (live on-chain if synced, else genesis config).
+    /// Returns `Address` by value (not a reference) since the list may come from `RwLock`.
+    pub fn expected_signer(&self, block_number: u64) -> Option<Address> {
+        let signers = self.effective_signers();
+        if signers.is_empty() {
             return None;
         }
-        let index = (block_number as usize) % self.poa_config.signers.len();
-        self.poa_config.signers.get(index)
+        let index = (block_number as usize) % signers.len();
+        signers.into_iter().nth(index)
     }
 }
 
@@ -310,19 +350,19 @@ mod tests {
         // Test round-robin assignment
         assert_eq!(
             chain.expected_signer(0),
-            Some(&"0x0000000000000000000000000000000000000001".parse().unwrap())
+            Some("0x0000000000000000000000000000000000000001".parse().unwrap())
         );
         assert_eq!(
             chain.expected_signer(1),
-            Some(&"0x0000000000000000000000000000000000000002".parse().unwrap())
+            Some("0x0000000000000000000000000000000000000002".parse().unwrap())
         );
         assert_eq!(
             chain.expected_signer(2),
-            Some(&"0x0000000000000000000000000000000000000003".parse().unwrap())
+            Some("0x0000000000000000000000000000000000000003".parse().unwrap())
         );
         assert_eq!(
             chain.expected_signer(3),
-            Some(&"0x0000000000000000000000000000000000000001".parse().unwrap())
+            Some("0x0000000000000000000000000000000000000001".parse().unwrap())
         );
     }
 
@@ -448,7 +488,7 @@ mod tests {
 
         // Single signer should always be the expected signer
         for block_num in 0..100u64 {
-            assert_eq!(chain.expected_signer(block_num), Some(&signer));
+            assert_eq!(chain.expected_signer(block_num), Some(signer));
         }
     }
 
@@ -473,11 +513,11 @@ mod tests {
 
         // Round-robin should wrap at 21
         for i in 0..21u64 {
-            assert_eq!(chain.expected_signer(i), Some(&signers[i as usize]));
+            assert_eq!(chain.expected_signer(i), Some(signers[i as usize]));
         }
         // Block 21 wraps back to signer[0]
-        assert_eq!(chain.expected_signer(21), Some(&signers[0]));
-        assert_eq!(chain.expected_signer(42), Some(&signers[0]));
+        assert_eq!(chain.expected_signer(21), Some(signers[0]));
+        assert_eq!(chain.expected_signer(42), Some(signers[0]));
     }
 
     #[test]
@@ -496,6 +536,70 @@ mod tests {
         assert_eq!(chain.block_period(), 5);
         assert_eq!(chain.epoch(), 100);
         assert_eq!(chain.signers().len(), 1);
+    }
+
+    #[test]
+    fn test_live_signers_starts_empty() {
+        let chain = PoaChainSpec::dev_chain();
+        assert!(!chain.has_live_signers());
+        // Effective signers fall back to genesis config
+        assert_eq!(chain.effective_signers(), chain.signers().to_vec());
+    }
+
+    #[test]
+    fn test_update_live_signers_overrides_genesis() {
+        let chain = PoaChainSpec::dev_chain();
+        let new_signers: Vec<Address> = vec![
+            "0x0000000000000000000000000000000000000042".parse().unwrap(),
+            "0x0000000000000000000000000000000000000043".parse().unwrap(),
+        ];
+        chain.update_live_signers(new_signers.clone());
+        assert!(chain.has_live_signers());
+        assert_eq!(chain.effective_signers(), new_signers);
+    }
+
+    #[test]
+    fn test_update_live_signers_changes_expected_signer() {
+        let chain = PoaChainSpec::dev_chain();
+        let original = chain.expected_signer(0).unwrap();
+
+        let new_signers: Vec<Address> = vec![
+            "0x0000000000000000000000000000000000000099".parse().unwrap(),
+        ];
+        chain.update_live_signers(new_signers.clone());
+
+        let updated = chain.expected_signer(0).unwrap();
+        // Should use the new on-chain signer, not the genesis one
+        assert_eq!(updated, new_signers[0]);
+        assert_ne!(updated, original);
+    }
+
+    #[test]
+    fn test_update_live_signers_is_authorized_signer() {
+        let chain = PoaChainSpec::dev_chain();
+        let new_signer: Address = "0x0000000000000000000000000000000000000099".parse().unwrap();
+
+        // Not authorized before update
+        assert!(!chain.is_authorized_signer(&new_signer));
+
+        // Authorized after update
+        chain.update_live_signers(vec![new_signer]);
+        assert!(chain.is_authorized_signer(&new_signer));
+    }
+
+    #[test]
+    fn test_live_signers_shared_across_clones() {
+        // Arc<RwLock> means clones share the same live cache
+        let chain = PoaChainSpec::dev_chain();
+        let chain_clone = chain.clone();
+
+        let new_signers: Vec<Address> = vec![
+            "0x0000000000000000000000000000000000000055".parse().unwrap(),
+        ];
+        chain.update_live_signers(new_signers.clone());
+
+        // Clone sees the same update (shared Arc)
+        assert_eq!(chain_clone.effective_signers(), new_signers);
     }
 
     #[test]

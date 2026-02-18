@@ -9,6 +9,7 @@
 
 use crate::chainspec::PoaChainSpec;
 use crate::consensus::{EXTRA_SEAL_LENGTH, EXTRA_VANITY_LENGTH};
+use crate::onchain::{read_gas_limit, read_signer_list, StateProviderStorageReader};
 use crate::signer::{BlockSealer, SignerManager};
 use alloy_primitives::{Address, Bytes, U256};
 use reth_basic_payload_builder::{
@@ -84,9 +85,44 @@ where
     ) -> eyre::Result<Self::PayloadBuilder> {
         let conf = ctx.payload_builder_config();
         let chain = ctx.chain_spec().chain();
-        let gas_limit = conf.gas_limit_for(chain);
+        let default_gas_limit = conf.gas_limit_for(chain);
 
-        // Build POA extra_data: 32 vanity bytes + 65 seal bytes (will be filled during signing)
+        // Read gas limit from on-chain ChainConfig contract (Phase 3: item 20).
+        // Falls back to CLI/genesis default if the contract isn't readable yet.
+        let gas_limit = match ctx.provider().latest() {
+            Ok(state) => {
+                let reader = StateProviderStorageReader(state.as_ref());
+                let onchain = read_gas_limit(&reader).filter(|&gl| gl > 0);
+                if let Some(gl) = onchain {
+                    if gl != default_gas_limit {
+                        println!(
+                            "  OnChain gas limit: {} (from ChainConfig, default was {})",
+                            gl, default_gas_limit
+                        );
+                    }
+                    gl
+                } else {
+                    default_gas_limit
+                }
+            }
+            Err(_) => default_gas_limit,
+        };
+
+        // Also seed the live signer cache from SignerRegistry at startup.
+        if let Ok(state) = ctx.provider().latest() {
+            let reader = StateProviderStorageReader(state.as_ref());
+            if let Some(list) = read_signer_list(&reader) {
+                if !list.signers.is_empty() {
+                    println!(
+                        "  OnChain signers: {} loaded from SignerRegistry",
+                        list.signers.len()
+                    );
+                    self.chain_spec.update_live_signers(list.signers);
+                }
+            }
+        }
+
+        // Build POA extra_data: 32 vanity bytes + 65 seal bytes (filled during signing)
         let extra_data = Bytes::from(vec![0u8; EXTRA_VANITY_LENGTH + EXTRA_SEAL_LENGTH]);
 
         let inner = reth_ethereum_payload_builder::EthereumPayloadBuilder::new(
@@ -104,6 +140,7 @@ where
             chain_spec: self.chain_spec,
             signer_manager: self.signer_manager,
             dev_mode: self.dev_mode,
+            client: ctx.provider().clone(),
         })
     }
 }
@@ -116,6 +153,8 @@ where
 ///
 /// After the inner builder constructs a block, this builder post-processes it
 /// to add POA signatures, set difficulty, and embed signer lists at epoch blocks.
+/// At epoch blocks, it also refreshes the live signer cache from the on-chain
+/// `SignerRegistry` contract so that `PoaConsensus` picks up governance changes.
 #[derive(Debug, Clone)]
 pub struct PoaPayloadBuilder<Pool, Client, EvmConfig> {
     /// The inner Ethereum payload builder that does the actual block construction.
@@ -126,6 +165,8 @@ pub struct PoaPayloadBuilder<Pool, Client, EvmConfig> {
     signer_manager: Arc<SignerManager>,
     /// Whether we're in dev mode (skip signing).
     dev_mode: bool,
+    /// State provider factory for reading on-chain contract storage.
+    client: Client,
 }
 
 impl<Pool, Client, EvmConfig> PayloadBuilder for PoaPayloadBuilder<Pool, Client, EvmConfig>
@@ -176,16 +217,20 @@ where
     }
 }
 
-impl<Pool, Client, EvmConfig> PoaPayloadBuilder<Pool, Client, EvmConfig> {
+impl<Pool, Client, EvmConfig> PoaPayloadBuilder<Pool, Client, EvmConfig>
+where
+    Client: StateProviderFactory + Clone,
+{
     /// Sign a built payload with POA signature.
     ///
     /// In dev mode, returns the payload unchanged.
     /// In production mode:
-    /// 1. Determines which signer should sign (round-robin)
-    /// 2. Sets difficulty (1=in-turn, 2=out-of-turn)
-    /// 3. Builds extra_data with POA format
-    /// 4. Signs the header
-    /// 5. Reconstructs the sealed block
+    /// 1. At epoch blocks — refreshes live signer list from on-chain SignerRegistry (Phase 3 item 21)
+    /// 2. Determines which signer should sign (round-robin using effective_signers)
+    /// 3. Sets difficulty (1=in-turn, 2=out-of-turn)
+    /// 4. Builds extra_data with POA format (vanity + [signers at epoch] + signature)
+    /// 5. Signs the header via BlockSealer
+    /// 6. Reconstructs the sealed block
     fn sign_payload(
         &self,
         payload: EthBuiltPayload,
@@ -196,8 +241,29 @@ impl<Pool, Client, EvmConfig> PoaPayloadBuilder<Pool, Client, EvmConfig> {
 
         let block = payload.block();
         let block_number = block.header().number;
+        let epoch = self.chain_spec.epoch();
+        let is_epoch = block_number > 0 && block_number % epoch == 0;
 
-        let signers = self.chain_spec.signers();
+        // Phase 3 item 21: At epoch blocks, refresh live signer list from SignerRegistry.
+        // This propagates on-chain governance changes (add/remove signers) without restart.
+        if is_epoch {
+            if let Ok(state) = self.client.latest() {
+                let reader = StateProviderStorageReader(state.as_ref());
+                if let Some(list) = read_signer_list(&reader) {
+                    if !list.signers.is_empty() {
+                        println!(
+                            "  Epoch #{}: refreshed {} signers from SignerRegistry",
+                            block_number,
+                            list.signers.len()
+                        );
+                        self.chain_spec.update_live_signers(list.signers);
+                    }
+                }
+            }
+        }
+
+        // Use effective_signers (live on-chain if available, else genesis config)
+        let signers = self.chain_spec.effective_signers();
         if signers.is_empty() {
             // No signers configured, return unsigned
             return Ok(payload);
@@ -205,7 +271,7 @@ impl<Pool, Client, EvmConfig> PoaPayloadBuilder<Pool, Client, EvmConfig> {
 
         // Determine which signer should sign this block (round-robin)
         let in_turn_signer = match self.chain_spec.expected_signer(block_number) {
-            Some(s) => *s,
+            Some(s) => s,
             None => return Ok(payload),
         };
 
@@ -241,9 +307,6 @@ impl<Pool, Client, EvmConfig> PoaPayloadBuilder<Pool, Client, EvmConfig> {
         header.difficulty = if is_in_turn { U256::from(1) } else { U256::from(2) };
 
         // Build extra_data with POA format
-        let epoch = self.chain_spec.epoch();
-        let is_epoch = block_number > 0 && block_number % epoch == 0;
-
         let mut extra_data = Vec::with_capacity(
             EXTRA_VANITY_LENGTH
                 + if is_epoch { signers.len() * 20 } else { 0 }
@@ -253,7 +316,7 @@ impl<Pool, Client, EvmConfig> PoaPayloadBuilder<Pool, Client, EvmConfig> {
         // Vanity (32 zero bytes)
         extra_data.extend_from_slice(&[0u8; EXTRA_VANITY_LENGTH]);
 
-        // At epoch blocks, embed the current signer list
+        // At epoch blocks, embed the effective (live) signer list
         if is_epoch {
             for signer in signers.iter() {
                 extra_data.extend_from_slice(signer.as_slice());
@@ -361,13 +424,13 @@ mod tests {
         let signers = chain.signers();
 
         // Block 0: signer at index 0 is in-turn
-        assert_eq!(chain.expected_signer(0), Some(&signers[0]));
+        assert_eq!(chain.expected_signer(0), Some(signers[0]));
         // Block 1: signer at index 1 is in-turn
-        assert_eq!(chain.expected_signer(1), Some(&signers[1]));
+        assert_eq!(chain.expected_signer(1), Some(signers[1]));
         // Block 2: signer at index 2 is in-turn
-        assert_eq!(chain.expected_signer(2), Some(&signers[2]));
+        assert_eq!(chain.expected_signer(2), Some(signers[2]));
         // Block 3: signer at index 0 is in-turn (wraps around)
-        assert_eq!(chain.expected_signer(3), Some(&signers[0]));
+        assert_eq!(chain.expected_signer(3), Some(signers[0]));
     }
 
     #[tokio::test]
@@ -410,7 +473,7 @@ mod tests {
 
         // Block 0: signer[0] is in-turn
         let in_turn_signer = chain.expected_signer(0).unwrap();
-        assert_eq!(*in_turn_signer, signers[0]);
+        assert_eq!(in_turn_signer, signers[0]);
 
         // In-turn signer should get difficulty 1
         let difficulty = U256::from(1);
@@ -424,8 +487,8 @@ mod tests {
 
         // Block 0: signer[0] is in-turn, so signer[1] is out-of-turn
         let in_turn = chain.expected_signer(0).unwrap();
-        assert_eq!(*in_turn, signers[0]);
-        assert_ne!(*in_turn, signers[1]);
+        assert_eq!(in_turn, signers[0]);
+        assert_ne!(in_turn, signers[1]);
 
         // Out-of-turn signer should get difficulty 2
         let difficulty = U256::from(2);

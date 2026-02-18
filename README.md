@@ -1,272 +1,194 @@
-# Custom POA Node Example
+# Meowchain
 
-This example demonstrates how to build a complete **Proof of Authority (POA)** blockchain using Reth that maintains full compatibility with Ethereum mainnet.
+Custom **Proof of Authority (POA)** blockchain built on [Reth](https://github.com/paradigmxyz/reth). Full Ethereum EVM compatibility — all hardforks through Prague — with POA consensus replacing the beacon chain.
 
-## Features
-
-- ✅ **Full Ethereum EVM compatibility** - All smart contracts work identically to mainnet
-- ✅ **All Ethereum hardforks enabled** - Shanghai, Cancun, Prague, and future upgrades
-- ✅ **Multi-signer support** - Configure multiple authorized validators
-- ✅ **Round-robin block production** - Fair signer rotation
-- ✅ **Configurable block time** - Set your desired block interval
-- ✅ **Epoch-based checkpoints** - Periodic signer list updates
-- ✅ **Standard JSON-RPC APIs** - Compatible with all Ethereum tooling
+**Chain ID:** 9323310 | **Block time:** 2s (dev) / 12s (prod) | **Gas limit:** 30M–60M | **Tests:** 192 passing
 
 ## Quick Start
 
-### 1. Run in Dev Mode (Single Node)
-
 ```bash
-cd /path/to/reth
-cargo run --release --example custom-poa-node -- --dev
-```
+# Build (fetches latest reth from main branch)
+just build
 
-This starts a local POA node with:
-- 20 prefunded accounts (10,000 ETH each)
-- 3 authorized signers
-- 2-second block time
-- All Ethereum hardforks enabled
+# Run dev node (auto-mines, 20 prefunded accounts, 3 signers)
+just dev
 
-### 2. Run with Custom Genesis
-
-Create a `poa-genesis.json` file (see [sample-genesis.json](./sample-genesis.json)) and run:
-
-```bash
-cargo run --release --example custom-poa-node -- --chain ./poa-genesis.json
+# Run tests
+just test
 ```
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                       POA Node Architecture                         │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│   ┌─────────────────┐     ┌─────────────────────────────────────┐  │
-│   │  POA Consensus  │     │  Ethereum EVM                        │  │
-│   │  ─────────────  │     │  ─────────────                       │  │
-│   │  • Signer auth  │     │  • All opcodes (identical to mainnet)│  │
-│   │  • Round-robin  │     │  • All precompiles                   │  │
-│   │  • Epoch mgmt   │     │  • EIP-1559 base fee                 │  │
-│   │  • Block timing │     │  • EIP-4844 blobs (if enabled)       │  │
-│   └─────────────────┘     └─────────────────────────────────────┘  │
-│                                                                      │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│   ┌─────────────────────────────────────────────────────────────┐  │
-│   │                    Chain Specification                       │  │
-│   │  ───────────────────────────────────────────────────────    │  │
-│   │  Hardforks: Frontier → ... → London → Paris → Shanghai →   │  │
-│   │             Cancun → Prague → [Future Upgrades]             │  │
-│   │                                                              │  │
-│   │  All hardforks enabled at genesis (block 0 / timestamp 0)   │  │
-│   └─────────────────────────────────────────────────────────────┘  │
-│                                                                      │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│   ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌───────────────┐  │
-│   │    P2P    │  │   RPC     │  │  Storage  │  │  Transaction  │  │
-│   │ Networking│  │  Server   │  │  (MDBX)   │  │     Pool      │  │
-│   └───────────┘  └───────────┘  └───────────┘  └───────────────┘  │
-│                                                                      │
-└─────────────────────────────────────────────────────────────────────┘
+meowchain (PoaNode)
+  ├── Consensus:        PoaConsensus — validates headers, POA signatures, timing, gas, receipt root
+  ├── Block Production: PoaPayloadBuilder — wraps EthereumPayloadBuilder + POA signing
+  ├── Block Rewards:    EIP-1967 Miner Proxy (0x...1967) as coinbase → Treasury
+  ├── Governance:       Gnosis Safe → ChainConfig / SignerRegistry / Treasury contracts
+  ├── EVM:              Identical to Ethereum mainnet (sequential, all opcodes, precompiles)
+  ├── Hardforks:        Frontier through Prague (all active at genesis block 0)
+  ├── RPC:              HTTP (8545) + WS (8546) + meow_* custom namespace on 0.0.0.0
+  └── Storage:          MDBX persistent database
 ```
 
-## Genesis Configuration
-
-### Sample Genesis JSON
-
-```json
-{
-    "config": {
-        "chainId": 31337,
-        "homesteadBlock": 0,
-        "eip150Block": 0,
-        "eip155Block": 0,
-        "eip158Block": 0,
-        "byzantiumBlock": 0,
-        "constantinopleBlock": 0,
-        "petersburgBlock": 0,
-        "istanbulBlock": 0,
-        "berlinBlock": 0,
-        "londonBlock": 0,
-        "terminalTotalDifficulty": 0,
-        "terminalTotalDifficultyPassed": true,
-        "shanghaiTime": 0,
-        "cancunTime": 0,
-        "pragueTime": 0,
-        "clique": {
-            "period": 12,
-            "epoch": 30000
-        }
-    },
-    "nonce": "0x0",
-    "timestamp": "0x0",
-    "extraData": "0x0000000000000000000000000000000000000000000000000000000000000000<SIGNER_ADDRESSES>0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-    "gasLimit": "0x1c9c380",
-    "difficulty": "0x1",
-    "mixHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
-    "coinbase": "0x0000000000000000000000000000000000000000",
-    "alloc": {
-        "0xYourAddress": {
-            "balance": "0xD3C21BCECCEDA1000000"
-        }
-    },
-    "baseFeePerGas": "0x3B9ACA00"
-}
-```
-
-### Extra Data Format
-
-The `extraData` field in POA blocks has a specific format:
+## Directory Structure
 
 ```
-[VANITY: 32 bytes][SIGNERS: N×20 bytes][SIGNATURE: 65 bytes]
+custom-reth-chain-/
+├── src/                        # Rust source (6,353 lines)
+│   ├── main.rs                 # CLI, node launch, block monitoring
+│   ├── node.rs                 # PoaNode — injects custom consensus + payload
+│   ├── consensus.rs            # PoaConsensus — signature verification, header validation
+│   ├── chainspec.rs            # PoaChainSpec — hardforks, POA config, signer rotation
+│   ├── genesis.rs              # Genesis builder — all pre-deployed contracts
+│   ├── payload.rs              # PoaPayloadBuilder — block signing pipeline
+│   ├── onchain.rs              # StorageReader — reads ChainConfig/SignerRegistry contracts
+│   ├── rpc.rs                  # meow_* RPC namespace
+│   ├── signer.rs               # SignerManager + BlockSealer
+│   └── bytecodes/              # 16 pre-compiled contract bytecodes (.bin/.hex)
+├── genesis/                    # Genesis JSON files
+│   ├── sample-genesis.json     # Dev genesis (chain ID 9323310, 37 alloc entries)
+│   └── production-genesis.json # Production genesis (25 alloc entries, 5 signers)
+├── genesis-contracts/          # Governance Solidity source
+│   ├── ChainConfig.sol         # Dynamic gas limit, block time, contract size params
+│   ├── SignerRegistry.sol      # On-chain POA signer management
+│   └── Treasury.sol            # Block reward / fee distribution
+├── Docker/                     # Docker artifacts
+│   ├── Dockerfile
+│   └── docker-compose.yml
+├── scoutup-go-explorer/        # Blockscout explorer integration
+├── signatures/                 # Contract ABI signatures (.json + .txt)
+├── md/                         # Documentation
+│   ├── Remaining.md            # Full status tracker + roadmap
+│   ├── USAGE.md                # Usage guide (RPC, CLI, accounts, config)
+│   └── main.md                 # Strategy notes
+├── CLAUDE.md                   # AI assistant context file
+└── Justfile                    # Build automation
 ```
 
-- **VANITY**: 32 bytes of arbitrary data
-- **SIGNERS**: List of authorized signer addresses (only in epoch blocks)
-- **SIGNATURE**: Block producer's signature (zeros in genesis)
+## Pre-deployed Genesis Contracts
 
-## Multi-Signer Setup
+No deployment needed — all live at block 0.
 
-### Adding Signers
+| Contract | Address | Purpose |
+|----------|---------|---------|
+| EIP-1967 Miner Proxy | `0x0000000000000000000000000000000000001967` | Block reward coinbase |
+| ERC-4337 EntryPoint v0.7 | `0x0000000071727De22E5E9d8BAf0edAc6f37da032` | Account abstraction |
+| WETH9 | `0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2` | Wrapped ETH |
+| Multicall3 | `0xcA11bde05977b3631167028862bE2a173976CA11` | Batch reads |
+| CREATE2 Deployer | `0x4e59b44847b379578588920cA78FbF26c0B4956C` | Deterministic deploys |
+| SimpleAccountFactory | `0x9406Cc6185a346906296840746125a0E44976454` | ERC-4337 wallet factory |
+| ChainConfig | `0x00000000000000000000000000000000C04F1600` | Governance: gas, block time |
+| SignerRegistry | `0x000000000000000000000000000000005164EB00` | Governance: signer list |
+| Treasury | `0x0000000000000000000000000000000007EA5B00` | Governance: fee splits |
+| Governance Safe (reserved) | `0x000000000000000000000000000000006F5AFE00` | Gnosis Safe multisig admin |
+| Safe Singleton v1.3.0 | `0xd9Db270c1B5E3Bd161E8c8503c55cEABeE709552` | Gnosis Safe core |
+| Safe Proxy Factory | `0xa6B71E26C5e0845f74c812102Ca7114b6a896AB2` | Gnosis Safe |
+| Safe Fallback Handler | `0xf48f2B2d2a534e402487b3ee7C18c33Aec0Fe5e4` | Gnosis Safe |
+| Safe MultiSend | `0xA238CBeb142c10Ef7Ad8442C6D1f9E89e07e7761` | Gnosis Safe |
 
-Configure multiple signers in your genesis:
+System contracts (EIP-4788, EIP-2935, EIP-7002, EIP-7251) also deployed at genesis.
 
-```json
-{
-    "config": {
-        "clique": {
-            "period": 12,
-            "epoch": 30000
-        }
-    },
-    "extraData": "0x0000000000000000000000000000000000000000000000000000000000000000f39Fd6e51aad88F6F4ce6aB8827279cffFb9226670997970C51812dc3A010C7d01b50e0d17dc79C83C44CdDdB6a900fa2b585dd299e03d12FA4293BC0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
-}
-```
-
-This example has 3 signers. They will produce blocks in round-robin order.
-
-### Signer Rotation
-
-- Block 0: Signer 1
-- Block 1: Signer 2
-- Block 2: Signer 3
-- Block 3: Signer 1 (repeats)
-
-### Difficulty Field
-
-- **Difficulty 1**: In-turn signer (expected signer for this slot)
-- **Difficulty 2**: Out-of-turn signer (backup if in-turn signer is unavailable)
-
-## Keeping Sync with Mainnet Upgrades
-
-To stay compatible with new Ethereum upgrades:
-
-### 1. Update Hardfork Timestamps
-
-When a new hardfork is announced for mainnet, add it to your chain spec:
-
-```rust
-// In chainspec.rs, add new hardforks:
-(EthereumHardfork::Osaka.boxed(), ForkCondition::Timestamp(OSAKA_TIMESTAMP)),
-```
-
-### 2. Update Dependencies
-
-Keep reth updated to get the latest EVM changes:
+## Building & Running
 
 ```bash
-git pull upstream main
-cargo update
+# Build release binary (cargo update first, fetches latest reth)
+just build
+
+# Build without updating deps
+just build-fast
+
+# Dev node (2s blocks, relaxed consensus)
+just dev
+
+# Production node (12s blocks, strict POA signatures)
+just run-production
+
+# Custom flags
+just run-custom -- --block-time 1 --gas-limit 300000000 --eager-mining
+
+# With signer key
+SIGNER_KEY=ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 just dev
+
+# Tests
+just test
+
+# Docker
+docker build -f Docker/Dockerfile -t meowchain .
+docker compose -f Docker/docker-compose.yml up
 ```
 
-### 3. Test Compatibility
+## CLI Reference
 
-Run the Ethereum Foundation tests to verify EVM compatibility:
+```
+--production           Strict POA signature enforcement
+--no-dev               Disable auto-mining dev mode
+--block-time <N>       Block interval in seconds
+--gas-limit <N>        Block gas limit override
+--eager-mining         Mine on tx arrival (not just interval)
+--signer-key <HEX>     64-char hex private key for block signing
+--datadir <PATH>       Database directory
+--http-addr / --http-port   HTTP RPC bind (default: 0.0.0.0:8545)
+--ws-addr / --ws-port       WS RPC bind (default: 0.0.0.0:8546)
+```
+
+## RPC
 
 ```bash
-make ef-tests
+# Standard Ethereum JSON-RPC on :8545
+curl -X POST http://localhost:8545 -H "Content-Type: application/json" \
+  --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
+
+# Custom meow_* namespace
+curl -X POST http://localhost:8545 -H "Content-Type: application/json" \
+  --data '{"jsonrpc":"2.0","method":"meow_chainConfig","params":[],"id":1}'
+curl -X POST http://localhost:8545 -H "Content-Type: application/json" \
+  --data '{"jsonrpc":"2.0","method":"meow_signers","params":[],"id":1}'
+curl -X POST http://localhost:8545 -H "Content-Type: application/json" \
+  --data '{"jsonrpc":"2.0","method":"meow_nodeInfo","params":[],"id":1}'
 ```
 
-## API Compatibility
+## Tooling Integration
 
-All standard Ethereum JSON-RPC APIs are supported:
+**MetaMask:** RPC URL `http://localhost:8545`, Chain ID `9323310`
 
+**Hardhat:**
+```typescript
+networks: { meowchain: { url: "http://localhost:8545", chainId: 9323310 } }
+```
+
+**Foundry:**
 ```bash
-# Get block number
-curl -X POST -H "Content-Type: application/json" \
-  --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
-  http://localhost:8545
-
-# Deploy a contract
-curl -X POST -H "Content-Type: application/json" \
-  --data '{"jsonrpc":"2.0","method":"eth_sendRawTransaction","params":["0x..."],"id":1}' \
-  http://localhost:8545
-
-# Call a contract
-curl -X POST -H "Content-Type: application/json" \
-  --data '{"jsonrpc":"2.0","method":"eth_call","params":[{...},"latest"],"id":1}' \
-  http://localhost:8545
+forge script ... --rpc-url http://localhost:8545 --chain-id 9323310 --broadcast
+cast block-number --rpc-url http://localhost:8545
 ```
 
-## Development Accounts
+## Dev Accounts (20 prefunded @ 10,000 ETH)
 
-When running in dev mode, 20 accounts are prefunded from the mnemonic:
+Mnemonic: `test test test test test test test test test test test junk`
 
-```
-test test test test test test test test test test test junk
-```
+| # | Address | Private Key |
+|---|---------|-------------|
+| 0 (signer) | `0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266` | `ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80` |
+| 1 (signer) | `0x70997970C51812dc3A010C7d01b50e0d17dc79C8` | `59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d` |
+| 2 (signer) | `0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC` | `5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a` |
+| 3–19 | see `src/genesis.rs:dev_accounts()` | Standard Foundry keys |
 
-| Account # | Address | Private Key |
-|-----------|---------|-------------|
-| 0 | 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266 | ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 |
-| 1 | 0x70997970C51812dc3A010C7d01b50e0d17dc79C8 | 59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d |
-| 2 | 0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC | 5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a |
+## Status
 
-## Production Deployment
+| Module | Tests | Status |
+|--------|-------|--------|
+| `consensus.rs` | 36 | Complete — signature verification, header validation, post-execution |
+| `genesis.rs` | 31 | Complete — dev + production configs, all pre-deployed contracts |
+| `onchain.rs` | 50+ | Complete — StateProviderStorageReader wired; gas limit + signers read from chain |
+| `chainspec.rs` | 22 | Complete |
+| `signer.rs` | 27 | Complete — in payload pipeline |
+| `payload.rs` | 12 | Complete — signs blocks in pipeline |
+| `rpc.rs` | 9 | Complete — meow_* namespace |
+| **Total** | **192** | **0 failed** |
 
-For production POA networks:
-
-1. **Generate unique keys** for each signer (never use dev keys!)
-2. **Configure multiple nodes** for high availability
-3. **Set appropriate block time** (12s matches mainnet)
-4. **Enable monitoring** (Prometheus/Grafana)
-5. **Configure P2P networking** properly
-
-### Multi-Node Setup with Kurtosis
-
-```yaml
-# network_params.yaml
-participants:
-  - el_type: reth
-    el_image: your-poa-reth:latest
-  - el_type: reth
-    el_image: your-poa-reth:latest
-  - el_type: reth
-    el_image: your-poa-reth:latest
-```
-
-```bash
-kurtosis run github.com/ethpandaops/ethereum-package \
-  --args-file network_params.yaml
-```
-
-## Module Overview
-
-| Module | Description |
-|--------|-------------|
-| `chainspec.rs` | POA chain specification with hardfork configuration |
-| `consensus.rs` | POA consensus validation and signer verification |
-| `genesis.rs` | Genesis configuration utilities |
-| `signer.rs` | Block signing and key management |
-| `main.rs` | Node entry point |
+**Next:** Performance engineering — parallel EVM (grevm), sub-second blocks, 300M+ gas limits, multi-node testing. See `md/Remaining.md` Section 12.
 
 ## License
 
 MIT OR Apache-2.0
-
-## Contributing
-
-Contributions are welcome! Please see the main [CONTRIBUTING.md](../../CONTRIBUTING.md) for guidelines.

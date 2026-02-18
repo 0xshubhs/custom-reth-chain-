@@ -44,7 +44,11 @@ Target State (MegaETH-inspired):
 | `src/rpc.rs` | 297 | `meow_*` RPC namespace - chainConfig, signers, nodeInfo | Complete |
 | `src/signer.rs` | 605 | `SignerManager` + `BlockSealer` - key management & signing | Complete (in pipeline) |
 | `src/bytecodes/` | — | Pre-compiled contract bytecodes (.bin/.hex) | Complete (16 files) |
-| `contracts/` | — | Governance Solidity contracts (ChainConfig, SignerRegistry, Treasury) | Complete |
+| `genesis-contracts/` | — | Governance Solidity contracts (ChainConfig, SignerRegistry, Treasury) | Complete |
+| `genesis/` | — | `sample-genesis.json` (dev) + `production-genesis.json` | Complete |
+| `Docker/` | — | `Dockerfile` + `docker-compose.yml` | Complete |
+| `scoutup-go-explorer/` | — | Blockscout Go wrapper for explorer integration | Complete |
+| `signatures/` | — | Contract ABI signatures (.json + .txt) | Complete |
 
 **Total: 6,353 lines Rust, 187 tests passing (2026-02-18)**
 
@@ -65,6 +69,10 @@ Target State (MegaETH-inspired):
 - `CHAIN_CONFIG_ADDRESS` → `src/genesis.rs` - on-chain config contract
 - `SIGNER_REGISTRY_ADDRESS` → `src/genesis.rs` - on-chain signer registry
 - `TREASURY_ADDRESS` → `src/genesis.rs` - fee distribution contract
+- Genesis files live in `genesis/` — `sample-genesis.json` (dev), `production-genesis.json`
+- Solidity source lives in `genesis-contracts/` — `ChainConfig.sol`, `SignerRegistry.sol`, `Treasury.sol`
+- Docker files live in `Docker/` — `Dockerfile`, `docker-compose.yml`
+- Contract ABI signatures live in `signatures/` — `signatures-contracts.json`, `signatures-contracts.txt`
 
 ### Reth Import Conventions
 ```rust
@@ -213,7 +221,10 @@ just docker
 - Production mode: strict consensus with POA signature verification
 - The `clique` field in genesis config JSON is informational only - not parsed by Reth
 - `just build` runs `cargo update` first to fetch latest reth from main branch
-- `USAGE.md` in `md/` is stale — refers to old `NodeConfig::test()` and chain ID 31337; ignore it
+- Genesis files are in `genesis/` (`sample-genesis.json`, `production-genesis.json`)
+- Solidity source is in `genesis-contracts/` (not `contracts/`)
+- Docker artifacts are in `Docker/` (not root)
+- Explorer is `scoutup-go-explorer/` (not `scoutup/`)
 
 ## Common Pitfalls
 

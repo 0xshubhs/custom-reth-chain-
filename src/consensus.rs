@@ -191,7 +191,7 @@ impl PoaConsensus {
         signer: &Address,
     ) -> Result<(), PoaConsensusError> {
         let expected_signer = self.chain_spec.expected_signer(header.number);
-        let is_in_turn = expected_signer == Some(signer);
+        let is_in_turn = expected_signer == Some(*signer);
 
         let expected_difficulty = if is_in_turn { 1u64 } else { 2u64 };
 

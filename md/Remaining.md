@@ -1,6 +1,6 @@
 ### Meowchain Custom POA Chain - Status Tracker
 
-> **Last audited: 2026-02-17**
+> **Last audited: 2026-02-18**
 
 ## Table of Contents
 
@@ -35,7 +35,7 @@
 | Consensus | `consensus.rs` | ~1256 | Complete - signature verification, timing, gas, receipt root, difficulty validation |
 | Genesis | `genesis.rs` | ~575 | Complete - dev/production configs, system contracts + ERC-4337 + Gnosis Safe pre-deploys |
 | Payload | `payload.rs` | ~507 | Complete - wraps EthereumPayloadBuilder + POA signing (difficulty, epoch signers) |
-| On-chain | `onchain.rs` | ~1129 | Infrastructure complete - StorageReader trait, slot constants, decode/encode, GenesisStorageReader. **NOT wired to runtime** |
+| On-chain | `onchain.rs` | ~1129 | Complete and wired - StorageReader trait, StateProviderStorageReader, slot constants, decode/encode, GenesisStorageReader |
 | RPC | `rpc.rs` | ~200+ | Complete - meow_chainConfig, meow_signers, meow_nodeInfo |
 | Signer | `signer.rs` | ~298 | Complete - loaded at runtime, wired into PoaPayloadBuilder via BlockSealer |
 | Bytecodes | `src/bytecodes/` | 16 files | Complete - .bin + .hex for all pre-deployed contracts |
@@ -71,9 +71,9 @@
 
 ### Infrastructure Done
 
-- [x] Docker build (`Dockerfile`)
+- [x] Docker build (`Docker/Dockerfile`)
 - [x] Docker Compose (single node)
-- [x] Blockscout explorer integration (Scoutup Go app in `scoutup/`)
+- [x] Blockscout explorer integration (Scoutup Go app in `scoutup-go-explorer/`)
 - [x] MDBX persistent storage (`data/db/`)
 - [x] Static files for headers/txns/receipts
 - [x] Dev mode with configurable block time (default 2s)
@@ -81,7 +81,7 @@
 - [x] 3 default POA signers (round-robin logic in chainspec)
 - [x] EIP-1559 base fee (0.875 gwei initial)
 - [x] EIP-4844 blob support enabled
-- [x] Basic unit tests in each module (**187 tests passing** as of 2026-02-17)
+- [x] Basic unit tests in each module (**192 tests passing** as of 2026-02-18)
 - [x] CLI argument parsing (clap) - chain-id, block-time, datadir, http/ws config, signer-key, gas-limit, eager-mining, production, no-dev
 - [x] External HTTP RPC on 0.0.0.0:8545
 - [x] External WebSocket RPC on 0.0.0.0:8546
@@ -99,6 +99,7 @@
 - [x] Governance contracts in genesis: ChainConfig, SignerRegistry, Treasury (with pre-populated storage)
 - [x] meow_* RPC namespace: chainConfig, signers, nodeInfo
 - [x] On-chain reader infrastructure (`onchain.rs`): StorageReader trait, slot constants, read_gas_limit(), read_signer_list(), is_signer_on_chain(), GenesisStorageReader
+- [x] **Phase 3 wiring (2026-02-18)**: `StateProviderStorageReader` adapter bridges live Reth state to `StorageReader`; `PoaChainSpec.live_signers` `Arc<RwLock<...>>` cache shared between consensus+payload; `PoaPayloadBuilder` reads on-chain gas limit at startup + refreshes signer list at epoch blocks; `PoaConsensus` uses `effective_signers()` for live governance
 
 ---
 
@@ -112,13 +113,13 @@
 | 2 | **No external RPC server** | FIXED | HTTP RPC on `0.0.0.0:8545` and WS on `0.0.0.0:8546` configured via `RpcServerArgs`. | `main.rs` |
 | 3 | **No consensus enforcement on sync** | FIXED | `PoaConsensus` validates headers with POA signature recovery in production mode. Dev mode skips signature checks. `recover_signer()` called in `validate_header()`. | `consensus.rs:249-287` |
 | 4 | **Post-execution validation stubbed** | FIXED | Validates `gas_used`, receipt root, and logs bloom against pre-computed values. | `consensus.rs:393-429` |
-| 5 | **Chain ID mismatch** | FIXED | All configs use 9323310. `sample-genesis.json` regenerated from code with correct chain ID, all contracts. | `genesis.rs`, `sample-genesis.json` |
+| 5 | **Chain ID mismatch** | FIXED | All configs use 9323310. `genesis/sample-genesis.json` regenerated from code with correct chain ID, all contracts. | `genesis.rs`, `genesis/sample-genesis.json` |
 | 6 | **No CLI argument parsing** | FIXED | Full `clap` CLI with all flags including `--gas-limit`, `--eager-mining`, `--production`. | `main.rs:62-118` |
 | 7 | **Hardcoded dev keys in binary** | PARTIALLY FIXED | Production loads from `--signer-key` / `SIGNER_KEY`. Dev keys still hardcoded for dev mode. | `main.rs:156-175`, `signer.rs:205-216` |
 
 ### P0-ALPHA - Fundamental Architecture Problems
 
-> **Progress update (2026-02-17):** ALL P0-ALPHA items FIXED. Production NodeBuilder with MDBX. PoaConsensus validates signatures. PoaPayloadBuilder signs blocks (difficulty 1/2, epoch signers). BlockSealer wired into pipeline. 187 tests pass. Requires rustc 1.93.1+.
+> **Progress update (2026-02-18):** ALL P0-ALPHA items FIXED + Phase 3 complete. Production NodeBuilder with MDBX. PoaConsensus validates signatures using live on-chain signer list. PoaPayloadBuilder signs blocks (difficulty 1/2, epoch signers), reads gas limit from ChainConfig, refreshes signers from SignerRegistry at epoch. StateProviderStorageReader wired. 192 tests pass. Requires rustc 1.93.1+.
 
 | # | Issue | Status | What the code does now | What still needs to happen |
 |---|-------|--------|------------------------|---------------------------|
@@ -129,29 +130,26 @@
 | A5 | **Consensus module is dead code** | FIXED | `PoaConsensus` LIVE in pipeline with signature verification | Done |
 | A6 | **Signer module is dead code** | FIXED | `BlockSealer` wired into `PoaPayloadBuilder.sign_payload()`. `SignerManager` loaded and used for block production. | Done |
 
-**Current architecture (2026-02-17):**
+**Current architecture (2026-02-18 — Phase 3 complete):**
 
 ```
-What we have now:
-  main.rs -> NodeConfig::default() + CLI args (clap)
-    -> Production NodeBuilder with persistent MDBX database
-    -> PoaNode (custom node type, dev_mode flag)
-      -> Components:
-        consensus:       PoaConsensus (LIVE - signature verification, timing, gas, receipt root)
-        payload_builder: PoaPayloadBuilder (LIVE - signs blocks, difficulty 1/2, epoch signers)
-        network:         EthereumNetworkBuilder (DEFAULT)
-        pool:            EthereumPoolBuilder (DEFAULT)
-      -> Block rewards: go to EIP-1967 miner proxy (0x...1967)
-      -> Block production: signed POA blocks with round-robin signer rotation
-      -> SignerManager + BlockSealer: wired into payload pipeline
-      -> meow_* RPC: chainConfig, signers, nodeInfo
-      -> Governance: ChainConfig + SignerRegistry + Treasury + Gnosis Safe in genesis
-
-What still needs to happen (on-chain governance wiring):
-  1. PoaPayloadBuilder reads gas limit from ChainConfig contract (currently hardcoded)
-  2. PoaConsensus reads signer list from SignerRegistry contract (currently hardcoded)
-  3. Shared live cache (RwLock) in PoaChainSpec for consensus ↔ payload communication
-  4. StateProviderStorageReader adapter in onchain.rs to bridge Reth → StorageReader trait
+main.rs -> NodeConfig::default() + CLI args (clap)
+  -> Production NodeBuilder with persistent MDBX database
+  -> PoaNode (custom node type, dev_mode flag)
+    -> Components:
+      consensus:       PoaConsensus (LIVE - signature verification, timing, gas, receipt root)
+                         uses effective_signers() → live on-chain or genesis fallback
+      payload_builder: PoaPayloadBuilder (LIVE - signs blocks, difficulty 1/2, epoch signers)
+                         reads gas_limit from ChainConfig at startup
+                         refreshes signer list from SignerRegistry at every epoch block
+      network:         EthereumNetworkBuilder (DEFAULT)
+      pool:            EthereumPoolBuilder (DEFAULT)
+    -> Block rewards: go to EIP-1967 miner proxy (0x...1967)
+    -> Block production: signed POA blocks with round-robin signer rotation
+    -> SignerManager + BlockSealer: wired into payload pipeline
+    -> meow_* RPC: chainConfig, signers, nodeInfo
+    -> Governance: ChainConfig + SignerRegistry + Treasury + Gnosis Safe in genesis
+    -> Live signer cache: Arc<RwLock<...>> in PoaChainSpec shared across consensus+payload
 ```
 
 ### P1 - Required for Production
@@ -274,7 +272,7 @@ meowchain run \
 | **`meowchain init` command** | Not implemented | CLI subcommand to initialize DB from genesis.json |
 | **`meowchain run` command** | Partially done | CLI exists with `--datadir`, `--http-*`, `--ws-*`, `--signer-key` flags. Missing: `--bootnodes`, `--port`, `--mine`, `--unlock` |
 | **`meowchain account` command** | Not implemented | Import/export/list signing keys |
-| **Genesis file distribution** | Partially done | `genesis.rs` can generate canonical JSON via `genesis_to_json()` and `write_genesis_file()`. `sample-genesis.json` is STALE (wrong chain ID, missing contracts) - needs regeneration |
+| **Genesis file distribution** | Done | `genesis.rs` generates canonical JSON. `genesis/sample-genesis.json` (dev, chain ID 9323310, all allocs) and `genesis/production-genesis.json` are both current. |
 | **Bootnode infrastructure** | Not implemented | At least 2-3 bootnodes with static IPs/DNS |
 | **Enode URL generation** | Not implemented | Each node needs a public enode URL for peering |
 | **State sync protocol** | Not implemented | Full sync from genesis + fast sync from snapshots |
@@ -940,15 +938,15 @@ Deploy:
 
 | # | Issue | File | Details |
 |---|-------|------|---------|
-| N1 | **`sample-genesis.json` is stale** | ~~`sample-genesis.json`~~ | **FIXED** - Regenerated from code with chain ID 9323310, all 30 alloc entries (20 dev + 4 system + 5 infra + 1 miner proxy). |
-| N2 | **Dockerfile CMD format mismatch** | ~~`Dockerfile`~~ | **FIXED** - CMD uses correct `--http-addr`, `--http-port`, `--ws-addr`, `--ws-port` format. |
-| N3 | **Dockerfile copies wrong binary name** | ~~`Dockerfile`~~ | **FIXED** - Copies `target/release/example-custom-poa-node` and renames to `meowchain`. |
+| N1 | **`sample-genesis.json` is stale** | ~~`genesis/sample-genesis.json`~~ | **FIXED** - Regenerated from code with chain ID 9323310, all 30 alloc entries (20 dev + 4 system + 5 infra + 1 miner proxy). Now in `genesis/` dir. |
+| N2 | **Dockerfile CMD format mismatch** | ~~`Docker/Dockerfile`~~ | **FIXED** - CMD uses correct `--http-addr`, `--http-port`, `--ws-addr`, `--ws-port` format. Now in `Docker/` dir. |
+| N3 | **Dockerfile copies wrong binary name** | ~~`Docker/Dockerfile`~~ | **FIXED** - Copies `target/release/example-custom-poa-node` and renames to `meowchain`. |
 | N5 | **Production config uses dev account keys** | `genesis.rs:130` | Still uses `dev_accounts()[0..5]` as signers. Real production MUST use unique keys. |
 | N7 | **Double block stream subscription** | ~~`main.rs`~~ | **FIXED** - Single `canonical_state_stream()` subscription. |
 
 ### Suggestions for Next Steps
 
-1. **Highest priority:** Wire on-chain contract reads into payload builder & consensus. `onchain.rs` has full reader infrastructure (50+ tests) but nothing calls it at runtime. The payload builder uses hardcoded gas limits and consensus uses hardcoded signers. This is the last step to make the chain governable without downtime.
+1. **DONE (2026-02-18):** On-chain contract reads wired into payload builder & consensus. `StateProviderStorageReader` bridges live Reth state. Gas limit read from `ChainConfig` at startup, signer list refreshed from `SignerRegistry` at every epoch block. `PoaConsensus` uses `effective_signers()` for live governance.
 
 2. **Second priority:** Multi-node test (3 signers + 1 full node on separate machines).
 
@@ -1272,11 +1270,12 @@ contract ChainConfig {
 ```
 
 **Implementation:**
-- [x] Write `ChainConfig.sol` with all tunable parameters (`contracts/ChainConfig.sol`)
+- [x] Write `ChainConfig.sol` with all tunable parameters (`genesis-contracts/ChainConfig.sol`)
 - [x] Pre-deploy in genesis at `0x00000000000000000000000000000000C04F1600` with pre-populated storage
 - [x] `onchain.rs`: `read_chain_config()`, `read_gas_limit()`, `read_block_time()` + 50+ tests
-- [ ] **Node reads config contract state before each block** ← NOT WIRED
-- [ ] **PoaConsensus validates against on-chain config (not hardcoded values)** ← NOT WIRED
+- [x] **Node reads gas limit from ChainConfig at startup** ← WIRED (2026-02-18) via `StateProviderStorageReader`
+- [x] **Node refreshes signer list from SignerRegistry at epoch blocks** ← WIRED (2026-02-18)
+- [x] **PoaConsensus validates against live on-chain signer list** ← WIRED via `effective_signers()` + shared `Arc<RwLock<...>>`
 - [x] Governance Safe (`0x000000000000000000000000000000006F5AFE00`) is admin in contract storage
 - [ ] Emit events for all parameter changes (indexable by explorer)
 
@@ -1300,11 +1299,11 @@ contract SignerRegistry {
 ```
 
 **Implementation:**
-- [x] Write `SignerRegistry.sol` (`contracts/SignerRegistry.sol`)
+- [x] Write `SignerRegistry.sol` (`genesis-contracts/SignerRegistry.sol`)
 - [x] Pre-deploy in genesis at `0x000000000000000000000000000000005164EB00` with initial signers in storage
 - [x] `onchain.rs`: `read_signer_list()`, `is_signer_on_chain()`, dynamic array + mapping slot computation
-- [ ] **`PoaConsensus` reads signer list from contract (not from genesis config)** ← NOT WIRED
-- [ ] Signer additions/removals take effect at next epoch block
+- [x] **`PoaConsensus` reads signer list from contract via live cache** ← WIRED (2026-02-18) via `effective_signers()`
+- [x] Signer additions/removals take effect at next epoch block (cache refreshed in `sign_payload` at epoch)
 - [x] Governance Safe is admin in contract storage
 - [ ] Prevents removing signers below threshold
 

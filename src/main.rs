@@ -53,7 +53,7 @@ use reth_ethereum::{
         node_config::NodeConfig,
     },
     provider::CanonStateSubscriptions,
-    tasks::TaskExecutor,
+    tasks::{RuntimeBuilder, RuntimeConfig, TokioConfig},
 };
 use std::{
     net::{IpAddr, Ipv4Addr},
@@ -241,7 +241,12 @@ async fn main() -> eyre::Result<()> {
     println!("  Data dir:    {:?}", cli.datadir);
 
     // Create the task executor (attaches to current tokio runtime)
-    let tasks = TaskExecutor::with_existing_handle(tokio::runtime::Handle::current())?;
+    let tasks = RuntimeBuilder::new(
+        RuntimeConfig::default()
+            .with_tokio(TokioConfig::existing_handle(tokio::runtime::Handle::current())),
+    )
+    .build()
+    .map_err(|e| eyre::eyre!("{e}"))?;
 
     // Initialize persistent MDBX database (replaces testing_node_with_datadir)
     let db_path = cli.datadir.join("db");
