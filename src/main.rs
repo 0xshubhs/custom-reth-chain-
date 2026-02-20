@@ -1,47 +1,11 @@
-//! # Custom POA (Proof of Authority) Node
-//!
-//! A production-grade POA blockchain node built on Reth that is fully compatible with
-//! Ethereum mainnet in terms of smart contract execution, hardforks, and JSON-RPC APIs.
-//!
-//! ## Architecture
-//!
-//! ```text
-//! PoaNode (custom)
-//!   ├── Consensus: PoaConsensus (validates signer authority, timing, difficulty)
-//!   ├── Block Production: Interval mining with POA block signing
-//!   ├── EVM: Identical to Ethereum mainnet (all opcodes, precompiles)
-//!   ├── Hardforks: Frontier through Prague (all at genesis)
-//!   └── RPC: Full eth_*, web3_*, net_* + external HTTP/WS
-//! ```
-//!
-//! ## Usage
-//!
-//! ```bash
-//! # Run in dev mode (default)
-//! cargo run --release
-//!
-//! # Run with custom settings
-//! cargo run --release -- --chain-id 9323310 --block-time 12 --datadir /data/meowchain
-//!
-//! # Run with signer key from environment
-//! SIGNER_KEY=ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 cargo run --release
-//! ```
+use example_custom_poa_node::chainspec::{PoaChainSpec, PoaConfig};
+use example_custom_poa_node::cli::Cli;
+use example_custom_poa_node::genesis;
+use example_custom_poa_node::node::PoaNode;
+use example_custom_poa_node::output;
+use example_custom_poa_node::rpc::{MeowApiServer, MeowRpc};
+use example_custom_poa_node::signer::{self, SignerManager};
 
-#![cfg_attr(not(test), warn(unused_crate_dependencies))]
-
-pub mod chainspec;
-pub mod consensus;
-pub mod genesis;
-pub mod node;
-pub mod onchain;
-pub mod payload;
-pub mod rpc;
-pub mod signer;
-
-use crate::chainspec::{PoaChainSpec, PoaConfig};
-use crate::node::PoaNode;
-use crate::rpc::{MeowApiServer, MeowRpc};
-use crate::signer::SignerManager;
 use alloy_consensus::BlockHeader;
 use clap::Parser;
 use futures_util::StreamExt;
@@ -49,79 +13,18 @@ use reth_db::init_db;
 use reth_ethereum::{
     node::builder::{NodeBuilder, NodeHandle},
     node::core::{
-        args::{DatadirArgs, DevArgs, RpcServerArgs},
+        args::{DatadirArgs, DevArgs, NetworkArgs, RpcServerArgs},
         node_config::NodeConfig,
     },
     provider::CanonStateSubscriptions,
     tasks::{RuntimeBuilder, RuntimeConfig, TokioConfig},
 };
+use reth_network_peers::TrustedPeer;
 use std::{
     net::{IpAddr, Ipv4Addr},
-    path::PathBuf,
     sync::Arc,
     time::Duration,
 };
-
-/// CLI arguments for the POA node
-#[derive(Parser, Debug)]
-#[command(name = "meowchain", about = "Meowchain POA Node")]
-struct Cli {
-    /// Chain ID for the network
-    #[arg(long, default_value = "9323310")]
-    chain_id: u64,
-
-    /// Block production interval in seconds
-    #[arg(long, default_value = "2")]
-    block_time: u64,
-
-    /// Data directory for chain storage
-    #[arg(long, default_value = "data")]
-    datadir: PathBuf,
-
-    /// HTTP RPC listen address
-    #[arg(long, default_value = "0.0.0.0")]
-    http_addr: String,
-
-    /// HTTP RPC port
-    #[arg(long, default_value = "8545")]
-    http_port: u16,
-
-    /// WebSocket RPC listen address
-    #[arg(long, default_value = "0.0.0.0")]
-    ws_addr: String,
-
-    /// WebSocket RPC port
-    #[arg(long, default_value = "8546")]
-    ws_port: u16,
-
-    /// Signer private key (hex, without 0x prefix).
-    /// Can also be set via SIGNER_KEY environment variable.
-    #[arg(long, env = "SIGNER_KEY")]
-    signer_key: Option<String>,
-
-    /// Use production genesis configuration (chain ID 9323310)
-    #[arg(long)]
-    production: bool,
-
-    /// Disable dev mode (no auto-mining)
-    #[arg(long)]
-    no_dev: bool,
-
-    /// Override block gas limit (e.g., 100000000 for 100M, 1000000000 for 1B)
-    #[arg(long)]
-    gas_limit: Option<u64>,
-
-    /// Enable eager mining: build block immediately when transactions arrive
-    /// instead of waiting for block-time interval
-    #[arg(long)]
-    eager_mining: bool,
-
-    /// Force interval-based block production even in production mode.
-    /// Useful for testing: node uses production signing (97-byte extra_data, strict POA)
-    /// but still auto-mines blocks at --block-time interval.
-    #[arg(long)]
-    mining: bool,
-}
 
 /// Main entry point for the POA node
 #[tokio::main]
@@ -167,19 +70,14 @@ async fn main() -> eyre::Result<()> {
 
     let chain_spec_arc = Arc::new(poa_chain.clone());
 
-    println!("=== Meowchain POA Node ===");
-    println!("Chain ID:        {}", poa_chain.inner().chain.id());
-    println!("Block period:    {} seconds", poa_chain.block_period());
+    output::print_banner(poa_chain.inner().chain.id(), poa_chain.block_period());
     let mode_str = match (is_dev_mode, cli.mining) {
         (true, _) => "dev",
         (false, true) => "production+mining",
         (false, false) => "production",
     };
-    println!("Mode:            {}", mode_str);
-    println!("Authorized signers ({}):", poa_chain.signers().len());
-    for (i, signer) in poa_chain.signers().iter().enumerate() {
-        println!("  {}. {}", i + 1, signer);
-    }
+    output::print_mode(mode_str);
+    output::print_signers(poa_chain.signers());
 
     // Set up signer manager with runtime key loading
     let signer_manager = Arc::new(SignerManager::new());
@@ -187,7 +85,7 @@ async fn main() -> eyre::Result<()> {
     if let Some(key) = &cli.signer_key {
         // Load signer key from CLI/environment
         let addr = signer_manager.add_signer_from_hex(key).await?;
-        println!("Signer key loaded: {}", addr);
+        output::print_signer_loaded(&addr);
     } else if is_dev_mode {
         // In dev mode, load dev signers (first 3 keys)
         for key in signer::dev::DEV_PRIVATE_KEYS.iter().take(3) {
@@ -196,13 +94,9 @@ async fn main() -> eyre::Result<()> {
                 .await
                 .expect("Dev keys should be valid");
         }
-        println!(
-            "Dev signers loaded: {} keys",
-            signer_manager.signer_addresses().await.len()
-        );
+        output::print_dev_signers_loaded(signer_manager.signer_addresses().await.len());
     } else {
-        println!("WARNING: No signer key provided. Node will validate but not produce blocks.");
-        println!("  Set --signer-key or SIGNER_KEY environment variable.");
+        output::print_no_signer_warning();
     }
 
     // Configure dev args (interval-based or eager block production).
@@ -235,23 +129,46 @@ async fn main() -> eyre::Result<()> {
     rpc_args.ws_addr = ws_addr;
     rpc_args.ws_port = cli.ws_port;
 
+    // Configure P2P network (bootnodes, port, discovery)
+    let mut network_args = NetworkArgs::default();
+    network_args.port = cli.port;
+    network_args.discovery.port = cli.port;
+    if cli.disable_discovery {
+        network_args.discovery.disable_discovery = true;
+    }
+    if let Some(ref bootnodes) = cli.bootnodes {
+        let parsed: Vec<TrustedPeer> = bootnodes
+            .iter()
+            .filter_map(|s| s.parse::<TrustedPeer>().ok())
+            .collect();
+        if !parsed.is_empty() {
+            network_args.bootnodes = Some(parsed);
+        }
+    }
+
     // Build node configuration with proper data directory
     let node_config = NodeConfig::default()
         .with_dev(dev_args)
         .with_rpc(rpc_args)
+        .with_network(network_args)
         .with_chain(poa_chain.inner().clone())
         .with_datadir_args(DatadirArgs {
             datadir: cli.datadir.clone().into(),
             ..Default::default()
         });
 
-    println!("\nNode configuration:");
-    println!("  Dev mode:    {}", is_dev_mode);
-    println!("  Mining mode: {}", if cli.eager_mining { "eager (tx-triggered)" } else { "interval" });
-    println!("  Gas limit:   {}", poa_chain.inner().genesis().gas_limit);
-    println!("  HTTP RPC:    {}:{}", http_addr, cli.http_port);
-    println!("  WS RPC:      {}:{}", ws_addr, cli.ws_port);
-    println!("  Data dir:    {:?}", cli.datadir);
+    output::print_config(
+        is_dev_mode,
+        if cli.eager_mining { "eager (tx-triggered)" } else { "interval" },
+        poa_chain.inner().genesis().gas_limit,
+        &http_addr.to_string(),
+        cli.http_port,
+        &ws_addr.to_string(),
+        cli.ws_port,
+        cli.port,
+        cli.bootnodes.as_ref().map(|b| b.len()),
+        &cli.datadir,
+    );
 
     // Create the task executor (attaches to current tokio runtime)
     let tasks = RuntimeBuilder::new(
@@ -288,14 +205,13 @@ async fn main() -> eyre::Result<()> {
         .extend_rpc_modules(move |ctx| {
             let meow_rpc = MeowRpc::new(rpc_chain_spec, rpc_signer_manager, rpc_dev_mode);
             ctx.modules.merge_configured(meow_rpc.into_rpc())?;
-            println!("  meow_* RPC namespace registered");
+            output::print_rpc_registered("meow_*");
             Ok(())
         })
         .launch_with_debug_capabilities()
         .await?;
 
-    println!("\nPOA node started successfully!");
-    println!("Genesis hash: {:?}", poa_chain.inner().genesis_hash());
+    output::print_node_started(poa_chain.inner().genesis_hash());
 
     // Spawn block monitoring task (single subscription)
     let monitoring_chain_spec = chain_spec_arc.clone();
@@ -311,7 +227,7 @@ async fn main() -> eyre::Result<()> {
             // Determine which signer should sign this block (round-robin)
             let signers = monitoring_chain_spec.signers();
             if signers.is_empty() {
-                println!("  Block #{} produced - {} txs (no signers configured)", block_num, tx_count);
+                output::print_block_no_signers(block_num, tx_count);
                 continue;
             }
             let signer_index = (block_num as usize) % signers.len();
@@ -319,46 +235,25 @@ async fn main() -> eyre::Result<()> {
 
             // Check if we have the key for the expected signer
             if monitoring_signer_manager.has_signer(&expected_signer).await {
-                println!(
-                    "  Block #{} - {} txs (in-turn: {})",
-                    block_num, tx_count, expected_signer
-                );
+                output::print_block_in_turn(block_num, tx_count, &expected_signer);
             } else {
                 let our_addresses = monitoring_signer_manager.signer_addresses().await;
                 let is_our_turn = our_addresses.iter().any(|addr| signers.contains(addr));
                 if is_our_turn {
-                    println!(
-                        "  Block #{} - {} txs (out-of-turn, expected: {})",
-                        block_num, tx_count, expected_signer
-                    );
+                    output::print_block_out_of_turn(block_num, tx_count, &expected_signer);
                 } else {
-                    println!(
-                        "  Block #{} - {} txs (expected signer: {})",
-                        block_num, tx_count, expected_signer
-                    );
+                    output::print_block_observed(block_num, tx_count, &expected_signer);
                 }
             }
         }
     });
 
     // Print prefunded accounts
-    println!("\nPrefunded accounts:");
     let accounts = genesis::dev_accounts();
-    for (i, account) in accounts.iter().enumerate().take(5) {
-        println!("  {}. {}", i + 1, account);
-    }
-
-    println!("\nChain data stored in: {:?}", cli.datadir);
-    println!(
-        "Blocks produced every {} seconds (POA interval mining)",
-        poa_chain.block_period()
-    );
-
-    println!("\nPOA node running. Press Ctrl+C to stop.");
-    println!("  HTTP RPC: http://{}:{}", cli.http_addr, cli.http_port);
-    println!("  WS RPC:   ws://{}:{}", cli.ws_addr, cli.ws_port);
+    output::print_prefunded(&accounts[..5.min(accounts.len())]);
+    output::print_chain_data(&cli.datadir, poa_chain.block_period());
+    output::print_running(&cli.http_addr, cli.http_port, &cli.ws_addr, cli.ws_port);
 
     // Keep the node running
     node_exit_future.await
 }
-

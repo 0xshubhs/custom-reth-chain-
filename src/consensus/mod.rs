@@ -6,6 +6,11 @@
 //! - Timing constraints are respected
 //! - The signer rotation follows the expected pattern
 
+pub mod errors;
+
+pub use errors::PoaConsensusError;
+pub use crate::constants::{ADDRESS_LENGTH, EXTRA_SEAL_LENGTH, EXTRA_VANITY_LENGTH};
+
 use crate::chainspec::PoaChainSpec;
 use alloy_consensus::{BlockHeader, Header};
 use alloy_primitives::{keccak256, Address, Signature, B256, U256};
@@ -15,79 +20,6 @@ use reth_primitives_traits::{
     Block, GotExpected, NodePrimitives, RecoveredBlock, SealedBlock, SealedHeader,
 };
 use std::sync::Arc;
-use thiserror::Error;
-
-/// Extra data structure for POA blocks
-/// Format: [vanity (32 bytes)][signers list (N*20 bytes, only in epoch blocks)][signature (65 bytes)]
-pub const EXTRA_VANITY_LENGTH: usize = 32;
-/// Signature length in extra data (65 bytes: r=32, s=32, v=1)
-pub const EXTRA_SEAL_LENGTH: usize = 65;
-/// Ethereum address length (20 bytes)
-pub const ADDRESS_LENGTH: usize = 20;
-
-/// POA-specific consensus errors
-#[derive(Debug, Error)]
-#[allow(missing_docs)]
-pub enum PoaConsensusError {
-    /// Block signer is not in the authorized signers list
-    #[error("Block signer {signer} is not authorized")]
-    UnauthorizedSigner {
-        /// The unauthorized signer address
-        signer: Address,
-    },
-
-    /// Block signature is invalid or cannot be recovered
-    #[error("Invalid block signature")]
-    InvalidSignature,
-
-    /// Extra data is too short to contain required POA information
-    #[error("Extra data too short: expected at least {expected} bytes, got {got}")]
-    ExtraDataTooShort {
-        /// Expected minimum length
-        expected: usize,
-        /// Actual length
-        got: usize,
-    },
-
-    /// Block timestamp is earlier than allowed
-    #[error("Block timestamp {timestamp} is before parent timestamp {parent_timestamp}")]
-    TimestampTooEarly {
-        /// Block timestamp
-        timestamp: u64,
-        /// Parent block timestamp
-        parent_timestamp: u64,
-    },
-
-    /// Block timestamp is too far in the future
-    #[error("Block timestamp {timestamp} is too far in the future")]
-    TimestampTooFarInFuture {
-        /// Block timestamp
-        timestamp: u64,
-    },
-
-    /// Block was signed by wrong signer (not in-turn)
-    #[error("Wrong block signer: expected {expected}, got {got}")]
-    WrongSigner {
-        /// Expected signer
-        expected: Address,
-        /// Actual signer
-        got: Address,
-    },
-
-    /// Difficulty field has invalid value for POA
-    #[error("Difficulty must be 0 (Engine API compatibility; authority is via ECDSA signature)")]
-    InvalidDifficulty,
-
-    /// Signer list in epoch block is invalid
-    #[error("Invalid signer list in epoch block")]
-    InvalidSignerList,
-}
-
-impl From<PoaConsensusError> for ConsensusError {
-    fn from(err: PoaConsensusError) -> Self {
-        ConsensusError::Custom(std::sync::Arc::new(err))
-    }
-}
 
 /// POA Consensus implementation
 #[derive(Debug, Clone)]
@@ -239,6 +171,49 @@ impl PoaConsensus {
     /// Returns a reference to the chain spec
     pub fn chain_spec(&self) -> &Arc<PoaChainSpec> {
         &self.chain_spec
+    }
+
+    // ─── Fork Choice Rule ─────────────────────────────────────────────
+    //
+    // POA uses difficulty=0 for Engine API compatibility, so we can't use
+    // cumulative difficulty for fork choice. Instead, we score chains by
+    // counting how many blocks were signed by their in-turn signer.
+    // In-turn blocks are preferred because they represent orderly round-robin
+    // block production, indicating a healthier chain.
+
+    /// Check if a block was signed by the expected in-turn signer.
+    ///
+    /// The in-turn signer for block N is `signers[N % signers.len()]`.
+    /// Returns `None` if the signer cannot be recovered (dev mode, missing sig).
+    pub fn is_in_turn(&self, header: &Header) -> Option<bool> {
+        let expected = self.chain_spec.expected_signer(header.number)?;
+        let actual = self.recover_signer(header).ok()?;
+        Some(actual == expected)
+    }
+
+    /// Score a chain segment by counting in-turn blocks.
+    ///
+    /// Higher score = more blocks signed by their expected in-turn signer.
+    /// This is used for fork choice: the chain with more in-turn blocks is preferred.
+    pub fn score_chain(&self, headers: &[Header]) -> u64 {
+        headers
+            .iter()
+            .filter(|h| self.is_in_turn(h).unwrap_or(false))
+            .count() as u64
+    }
+
+    /// Compare two chain segments for fork choice.
+    ///
+    /// Returns `std::cmp::Ordering`:
+    /// - `Greater` if chain_a is preferred (more in-turn blocks)
+    /// - `Less` if chain_b is preferred
+    /// - `Equal` if tied (fall back to longest chain)
+    ///
+    /// When scores are equal, the longer chain wins.
+    pub fn compare_chains(&self, chain_a: &[Header], chain_b: &[Header]) -> std::cmp::Ordering {
+        let score_a = self.score_chain(chain_a);
+        let score_b = self.score_chain(chain_b);
+        score_a.cmp(&score_b).then_with(|| chain_a.len().cmp(&chain_b.len()))
     }
 }
 
@@ -1250,5 +1225,798 @@ mod tests {
             None,
         );
         assert!(post_exec.is_ok(), "Post-execution validation should pass");
+    }
+
+    // ─── Fork Choice Tests ──────────────────────────────────────────────
+
+    /// Helper: create a signed header for a specific signer at a given block number.
+    async fn build_signed_header(
+        block_number: u64,
+        signer_key_index: usize,
+    ) -> Header {
+        let manager = Arc::new(SignerManager::new());
+        let address = manager
+            .add_signer_from_hex(dev::DEV_PRIVATE_KEYS[signer_key_index])
+            .await
+            .unwrap();
+        let sealer = BlockSealer::new(manager);
+        let header = Header {
+            number: block_number,
+            gas_limit: 30_000_000,
+            timestamp: 12345 + block_number * 2,
+            extra_data: vec![0u8; EXTRA_VANITY_LENGTH + EXTRA_SEAL_LENGTH].into(),
+            ..Default::default()
+        };
+        sealer.seal_header(header, &address).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_is_in_turn_block1() {
+        // Dev chain has 3 signers: accounts 0, 1, 2
+        // Block 1 → signer index 1 (signers[1 % 3])
+        let consensus = production_consensus();
+
+        // Sign block 1 with signer 1 → should be in-turn
+        let header = build_signed_header(1, 1).await;
+        assert_eq!(consensus.is_in_turn(&header), Some(true));
+
+        // Sign block 1 with signer 0 → should be out-of-turn
+        let header_oot = build_signed_header(1, 0).await;
+        assert_eq!(consensus.is_in_turn(&header_oot), Some(false));
+    }
+
+    #[tokio::test]
+    async fn test_is_in_turn_round_robin() {
+        let consensus = production_consensus();
+
+        // Block 0 → signer 0, Block 1 → signer 1, Block 2 → signer 2, Block 3 → signer 0
+        for block_num in 0u64..6 {
+            let expected_signer_idx = (block_num as usize) % 3;
+            let header = build_signed_header(block_num, expected_signer_idx).await;
+            assert_eq!(
+                consensus.is_in_turn(&header),
+                Some(true),
+                "Block {} should be in-turn for signer {}",
+                block_num,
+                expected_signer_idx
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_score_chain_all_in_turn() {
+        let consensus = production_consensus();
+
+        // Build a chain where every block is signed by the in-turn signer
+        let mut headers = Vec::new();
+        for i in 0u64..6 {
+            let signer_idx = (i as usize) % 3;
+            headers.push(build_signed_header(i, signer_idx).await);
+        }
+
+        assert_eq!(consensus.score_chain(&headers), 6);
+    }
+
+    #[tokio::test]
+    async fn test_score_chain_all_out_of_turn() {
+        let consensus = production_consensus();
+
+        // Build a chain where every block is signed by the WRONG signer
+        let mut headers = Vec::new();
+        for i in 0u64..6 {
+            let wrong_signer_idx = ((i as usize) + 1) % 3; // off by one
+            headers.push(build_signed_header(i, wrong_signer_idx).await);
+        }
+
+        assert_eq!(consensus.score_chain(&headers), 0);
+    }
+
+    #[tokio::test]
+    async fn test_score_chain_mixed() {
+        let consensus = production_consensus();
+
+        // 3 in-turn + 3 out-of-turn
+        let mut headers = Vec::new();
+        for i in 0u64..6 {
+            if i < 3 {
+                let signer_idx = (i as usize) % 3;
+                headers.push(build_signed_header(i, signer_idx).await);
+            } else {
+                let wrong_idx = ((i as usize) + 1) % 3;
+                headers.push(build_signed_header(i, wrong_idx).await);
+            }
+        }
+
+        assert_eq!(consensus.score_chain(&headers), 3);
+    }
+
+    #[tokio::test]
+    async fn test_compare_chains_in_turn_wins() {
+        let consensus = production_consensus();
+
+        // Chain A: all in-turn (score = 3)
+        let mut chain_a = Vec::new();
+        for i in 0u64..3 {
+            let signer_idx = (i as usize) % 3;
+            chain_a.push(build_signed_header(i, signer_idx).await);
+        }
+
+        // Chain B: all out-of-turn (score = 0)
+        let mut chain_b = Vec::new();
+        for i in 0u64..3 {
+            let wrong_idx = ((i as usize) + 1) % 3;
+            chain_b.push(build_signed_header(i, wrong_idx).await);
+        }
+
+        assert_eq!(
+            consensus.compare_chains(&chain_a, &chain_b),
+            std::cmp::Ordering::Greater
+        );
+    }
+
+    #[tokio::test]
+    async fn test_compare_chains_equal_score_longer_wins() {
+        let consensus = production_consensus();
+
+        // Both chains: all out-of-turn (score = 0 each)
+        let mut chain_a = Vec::new();
+        for i in 0u64..4 {
+            let wrong_idx = ((i as usize) + 1) % 3;
+            chain_a.push(build_signed_header(i, wrong_idx).await);
+        }
+
+        let mut chain_b = Vec::new();
+        for i in 0u64..3 {
+            let wrong_idx = ((i as usize) + 1) % 3;
+            chain_b.push(build_signed_header(i, wrong_idx).await);
+        }
+
+        // Same score (0), but chain_a is longer → chain_a wins
+        assert_eq!(
+            consensus.compare_chains(&chain_a, &chain_b),
+            std::cmp::Ordering::Greater
+        );
+    }
+
+    #[tokio::test]
+    async fn test_score_chain_empty() {
+        let consensus = production_consensus();
+        assert_eq!(consensus.score_chain(&[]), 0);
+    }
+
+    // ─── State Sync / Chain Validation Tests ─────────────────────────────
+
+    /// Helper: build a chain segment of N signed blocks with proper parent linkage.
+    async fn build_chain_segment(
+        start_block: u64,
+        count: u64,
+        parent_hash: B256,
+    ) -> Vec<(Header, SealedHeader<Header>)> {
+        let mut chain = Vec::new();
+        let mut prev_hash = parent_hash;
+
+        for i in 0..count {
+            let block_num = start_block + i;
+            let signer_idx = (block_num as usize) % 3; // round-robin across 3 signers
+
+            let manager = Arc::new(SignerManager::new());
+            let address = manager
+                .add_signer_from_hex(dev::DEV_PRIVATE_KEYS[signer_idx])
+                .await
+                .unwrap();
+            let sealer = BlockSealer::new(manager);
+
+            let header = Header {
+                number: block_num,
+                parent_hash: prev_hash,
+                gas_limit: 30_000_000,
+                timestamp: 1000 + block_num * 2,
+                extra_data: vec![0u8; EXTRA_VANITY_LENGTH + EXTRA_SEAL_LENGTH].into(),
+                ..Default::default()
+            };
+
+            let signed = sealer.seal_header(header, &address).await.unwrap();
+            let sealed = SealedHeader::seal_slow(signed.clone());
+
+            prev_hash = sealed.hash();
+            chain.push((signed, sealed));
+        }
+        chain
+    }
+
+    #[tokio::test]
+    async fn test_sync_chain_of_10_blocks() {
+        let consensus = production_consensus();
+        let chain = build_chain_segment(1, 10, B256::ZERO).await;
+
+        // Validate each block sequentially (simulates full sync)
+        for i in 0..chain.len() {
+            let (_, sealed) = &chain[i];
+
+            // validate_header: checks signature
+            let result: Result<(), ConsensusError> =
+                HeaderValidator::validate_header(&consensus, sealed);
+            assert!(result.is_ok(), "Block {} header validation failed: {:?}", i + 1, result);
+
+            // validate_header_against_parent: checks parent hash, number, timestamp
+            if i > 0 {
+                let (_, parent) = &chain[i - 1];
+                let result: Result<(), ConsensusError> =
+                    HeaderValidator::validate_header_against_parent(&consensus, sealed, parent);
+                assert!(
+                    result.is_ok(),
+                    "Block {} parent validation failed: {:?}",
+                    i + 1,
+                    result
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sync_rejects_tampered_signature() {
+        let consensus = production_consensus();
+        let chain = build_chain_segment(1, 3, B256::ZERO).await;
+
+        // Tamper with the signature of block 2 by zeroing it out entirely
+        let (mut tampered_header, _) = chain[1].clone();
+        let len = tampered_header.extra_data.len();
+        let mut extra = tampered_header.extra_data.to_vec();
+        // Zero out the entire 65-byte signature
+        for byte in extra[len - EXTRA_SEAL_LENGTH..].iter_mut() {
+            *byte = 0;
+        }
+        tampered_header.extra_data = extra.into();
+
+        let sealed_tampered = SealedHeader::seal_slow(tampered_header);
+        let result: Result<(), ConsensusError> =
+            HeaderValidator::validate_header(&consensus, &sealed_tampered);
+        assert!(result.is_err(), "Tampered block should be rejected");
+    }
+
+    #[tokio::test]
+    async fn test_sync_rejects_wrong_parent_hash() {
+        let consensus = production_consensus();
+        let chain = build_chain_segment(1, 3, B256::ZERO).await;
+
+        // Create block 2 with wrong parent hash
+        let manager = Arc::new(SignerManager::new());
+        let address = manager
+            .add_signer_from_hex(dev::DEV_PRIVATE_KEYS[1])
+            .await
+            .unwrap();
+        let sealer = BlockSealer::new(manager);
+
+        let bad_header = Header {
+            number: 2,
+            parent_hash: B256::from([0xAA; 32]), // wrong parent
+            gas_limit: 30_000_000,
+            timestamp: 1004,
+            extra_data: vec![0u8; EXTRA_VANITY_LENGTH + EXTRA_SEAL_LENGTH].into(),
+            ..Default::default()
+        };
+        let signed = sealer.seal_header(bad_header, &address).await.unwrap();
+        let sealed = SealedHeader::seal_slow(signed);
+
+        let (_, parent) = &chain[0];
+        let result: Result<(), ConsensusError> =
+            HeaderValidator::validate_header_against_parent(&consensus, &sealed, parent);
+        assert!(result.is_err(), "Wrong parent hash should be rejected");
+    }
+
+    #[tokio::test]
+    async fn test_sync_rejects_unauthorized_signer() {
+        let consensus = production_consensus();
+
+        // Sign a block with signer index 5 (not in the 3-signer dev chain)
+        let manager = Arc::new(SignerManager::new());
+        let address = manager
+            .add_signer_from_hex(dev::DEV_PRIVATE_KEYS[5])
+            .await
+            .unwrap();
+        let sealer = BlockSealer::new(manager);
+
+        let header = Header {
+            number: 1,
+            gas_limit: 30_000_000,
+            timestamp: 1002,
+            extra_data: vec![0u8; EXTRA_VANITY_LENGTH + EXTRA_SEAL_LENGTH].into(),
+            ..Default::default()
+        };
+        let signed = sealer.seal_header(header, &address).await.unwrap();
+        let sealed = SealedHeader::seal_slow(signed);
+
+        let result: Result<(), ConsensusError> =
+            HeaderValidator::validate_header(&consensus, &sealed);
+        assert!(result.is_err(), "Unauthorized signer should be rejected");
+    }
+
+    #[tokio::test]
+    async fn test_sync_long_chain_100_blocks() {
+        let consensus = production_consensus();
+        let chain = build_chain_segment(1, 100, B256::ZERO).await;
+
+        // All 100 blocks should validate
+        for i in 0..chain.len() {
+            let (_, sealed) = &chain[i];
+            let result: Result<(), ConsensusError> =
+                HeaderValidator::validate_header(&consensus, sealed);
+            assert!(result.is_ok(), "Block {} validation failed", i + 1);
+        }
+
+        // Verify parent chain linkage
+        for i in 1..chain.len() {
+            let (_, sealed) = &chain[i];
+            let (_, parent) = &chain[i - 1];
+            let result: Result<(), ConsensusError> =
+                HeaderValidator::validate_header_against_parent(&consensus, sealed, parent);
+            assert!(result.is_ok(), "Block {} parent check failed", i + 1);
+        }
+    }
+
+    // ─── 3-Signer Network Simulation ─────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_3_signer_round_robin_production() {
+        // Create 3 independent consensus instances (same chain spec, same signers)
+        let chain = Arc::new(crate::chainspec::PoaChainSpec::dev_chain());
+        let nodes: Vec<PoaConsensus> = (0..3)
+            .map(|_| PoaConsensus::new(chain.clone()))
+            .collect();
+
+        // Each node has a different signer key
+        let mut sealers = Vec::new();
+        let mut addresses = Vec::new();
+        for i in 0..3 {
+            let mgr = Arc::new(SignerManager::new());
+            let addr = mgr.add_signer_from_hex(dev::DEV_PRIVATE_KEYS[i]).await.unwrap();
+            addresses.push(addr);
+            sealers.push(BlockSealer::new(mgr));
+        }
+
+        // Build 9 blocks in round-robin (3 full rotations)
+        let mut prev_hash = B256::ZERO;
+        let mut prev_sealed: Option<SealedHeader<Header>> = None;
+        for block_num in 1u64..=9 {
+            let signer_idx = (block_num as usize) % 3;
+
+            let header = Header {
+                number: block_num,
+                parent_hash: prev_hash,
+                gas_limit: 30_000_000,
+                timestamp: 1000 + block_num * 2,
+                extra_data: vec![0u8; EXTRA_VANITY_LENGTH + EXTRA_SEAL_LENGTH].into(),
+                ..Default::default()
+            };
+
+            let signed = sealers[signer_idx]
+                .seal_header(header, &addresses[signer_idx])
+                .await
+                .unwrap();
+            let sealed = SealedHeader::seal_slow(signed);
+
+            // ALL 3 nodes must validate this block
+            for (node_idx, node) in nodes.iter().enumerate() {
+                let result: Result<(), ConsensusError> =
+                    HeaderValidator::validate_header(node, &sealed);
+                assert!(
+                    result.is_ok(),
+                    "Node {} rejected block {} signed by signer {}: {:?}",
+                    node_idx, block_num, signer_idx, result
+                );
+
+                if let Some(ref parent) = prev_sealed {
+                    let result: Result<(), ConsensusError> =
+                        HeaderValidator::validate_header_against_parent(node, &sealed, parent);
+                    assert!(
+                        result.is_ok(),
+                        "Node {} rejected block {} parent chain: {:?}",
+                        node_idx, block_num, result
+                    );
+                }
+            }
+
+            prev_hash = sealed.hash();
+            prev_sealed = Some(sealed);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_3_signer_out_of_turn_accepted() {
+        // When a signer is offline, another signer produces the block out-of-turn
+        let chain = Arc::new(crate::chainspec::PoaChainSpec::dev_chain());
+        let consensus = PoaConsensus::new(chain);
+
+        // Block 1 should be signer 1's turn, but signer 0 produces it (out-of-turn)
+        let header = build_signed_header(1, 0).await;
+        let sealed = SealedHeader::seal_slow(header.clone());
+
+        // Out-of-turn blocks should still be accepted
+        let result: Result<(), ConsensusError> =
+            HeaderValidator::validate_header(&consensus, &sealed);
+        assert!(result.is_ok(), "Out-of-turn block should be accepted");
+
+        // But fork choice should prefer in-turn
+        let in_turn_header = build_signed_header(1, 1).await;
+        assert_eq!(consensus.is_in_turn(&header), Some(false));
+        assert_eq!(consensus.is_in_turn(&in_turn_header), Some(true));
+    }
+
+    #[tokio::test]
+    async fn test_3_signer_unauthorized_signer_rejected() {
+        let chain = Arc::new(crate::chainspec::PoaChainSpec::dev_chain());
+        let nodes: Vec<PoaConsensus> = (0..3)
+            .map(|_| PoaConsensus::new(chain.clone()))
+            .collect();
+
+        // Signer 5 is NOT in the 3-signer dev chain
+        let mgr = Arc::new(SignerManager::new());
+        let addr = mgr.add_signer_from_hex(dev::DEV_PRIVATE_KEYS[5]).await.unwrap();
+        let sealer = BlockSealer::new(mgr);
+
+        let header = Header {
+            number: 1,
+            gas_limit: 30_000_000,
+            timestamp: 1002,
+            extra_data: vec![0u8; EXTRA_VANITY_LENGTH + EXTRA_SEAL_LENGTH].into(),
+            ..Default::default()
+        };
+        let signed = sealer.seal_header(header, &addr).await.unwrap();
+        let sealed = SealedHeader::seal_slow(signed);
+
+        // ALL 3 nodes must reject this unauthorized block
+        for (node_idx, node) in nodes.iter().enumerate() {
+            let result: Result<(), ConsensusError> =
+                HeaderValidator::validate_header(node, &sealed);
+            assert!(
+                result.is_err(),
+                "Node {} should reject unauthorized signer",
+                node_idx
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_3_signer_missed_turns_and_catchup() {
+        // Simulate: signer 1 is offline for blocks 1-3, signer 0 fills in
+        let chain = Arc::new(crate::chainspec::PoaChainSpec::dev_chain());
+        let consensus = PoaConsensus::new(chain);
+
+        let mut prev_hash = B256::ZERO;
+        let mut headers = Vec::new();
+
+        for block_num in 1u64..=6 {
+            // Signer 0 produces ALL blocks (some in-turn, some out-of-turn)
+            let header = Header {
+                number: block_num,
+                parent_hash: prev_hash,
+                gas_limit: 30_000_000,
+                timestamp: 1000 + block_num * 2,
+                extra_data: vec![0u8; EXTRA_VANITY_LENGTH + EXTRA_SEAL_LENGTH].into(),
+                ..Default::default()
+            };
+
+            let mgr = Arc::new(SignerManager::new());
+            let addr = mgr.add_signer_from_hex(dev::DEV_PRIVATE_KEYS[0]).await.unwrap();
+            let sealer = BlockSealer::new(mgr);
+            let signed = sealer.seal_header(header, &addr).await.unwrap();
+            let sealed = SealedHeader::seal_slow(signed.clone());
+
+            // All blocks should be valid (signer 0 is authorized even out-of-turn)
+            let result: Result<(), ConsensusError> =
+                HeaderValidator::validate_header(&consensus, &sealed);
+            assert!(result.is_ok(), "Block {} should be valid", block_num);
+
+            prev_hash = sealed.hash();
+            headers.push(signed);
+        }
+
+        // Check in-turn vs out-of-turn
+        // Dev signers: index 0, 1, 2 — signer 0 is in-turn at block 0, 3, 6, ...
+        assert_eq!(consensus.is_in_turn(&headers[2]), Some(true));  // block 3 → idx 0 ✓
+        assert_eq!(consensus.is_in_turn(&headers[0]), Some(false)); // block 1 → idx 1 expected, got 0
+        assert_eq!(consensus.is_in_turn(&headers[1]), Some(false)); // block 2 → idx 2 expected, got 0
+    }
+
+    // ─── Multi-Node Integration Tests ────────────────────────────────────
+
+    /// Helper: create a consensus with a custom signer list
+    fn consensus_with_signers(signer_addrs: Vec<Address>) -> PoaConsensus {
+        use crate::chainspec::{PoaConfig, PoaChainSpec};
+        let genesis = crate::genesis::create_dev_genesis();
+        let poa_config = PoaConfig {
+            period: 2,
+            epoch: 10, // short epoch for testing
+            signers: signer_addrs,
+        };
+        let chain = Arc::new(PoaChainSpec::new(genesis, poa_config));
+        PoaConsensus::new(chain)
+    }
+
+    /// Helper: derive address from a dev private key index
+    async fn dev_address(key_index: usize) -> Address {
+        let mgr = Arc::new(SignerManager::new());
+        mgr.add_signer_from_hex(dev::DEV_PRIVATE_KEYS[key_index]).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_multi_node_5_signer_sequential() {
+        // 5-signer production-like setup: signers 0-4
+        let mut addrs = Vec::new();
+        for i in 0..5 {
+            addrs.push(dev_address(i).await);
+        }
+
+        let consensus = consensus_with_signers(addrs.clone());
+
+        // Build 15 blocks (3 full rotations)
+        let mut prev_hash = B256::ZERO;
+        for block_num in 1u64..=15 {
+            let signer_idx = (block_num as usize) % 5;
+            let mgr = Arc::new(SignerManager::new());
+            let addr = mgr.add_signer_from_hex(dev::DEV_PRIVATE_KEYS[signer_idx]).await.unwrap();
+            let sealer = BlockSealer::new(mgr);
+
+            let header = Header {
+                number: block_num,
+                parent_hash: prev_hash,
+                gas_limit: 30_000_000,
+                timestamp: 1000 + block_num * 2,
+                extra_data: vec![0u8; EXTRA_VANITY_LENGTH + EXTRA_SEAL_LENGTH].into(),
+                ..Default::default()
+            };
+            let signed = sealer.seal_header(header, &addr).await.unwrap();
+            let sealed = SealedHeader::seal_slow(signed);
+
+            let result: Result<(), ConsensusError> =
+                HeaderValidator::validate_header(&consensus, &sealed);
+            assert!(result.is_ok(), "Block {} by signer {} failed", block_num, signer_idx);
+
+            prev_hash = sealed.hash();
+        }
+    }
+
+    #[tokio::test]
+    async fn test_multi_node_signer_addition_at_epoch() {
+        // Start with 3 signers, at epoch block (block 10) expand to 5
+        let mut initial_addrs = Vec::new();
+        for i in 0..3 {
+            initial_addrs.push(dev_address(i).await);
+        }
+
+        let consensus = consensus_with_signers(initial_addrs.clone());
+
+        // Before epoch: blocks 1-9, signers 0-2
+        for block_num in 1u64..=9 {
+            let signer_idx = (block_num as usize) % 3;
+            let header = build_signed_header(block_num, signer_idx).await;
+            let sealed = SealedHeader::seal_slow(header);
+            let result: Result<(), ConsensusError> =
+                HeaderValidator::validate_header(&consensus, &sealed);
+            assert!(result.is_ok(), "Pre-epoch block {} failed", block_num);
+        }
+
+        // Update live signers to include signers 3 and 4 (simulates epoch update)
+        let mut expanded = Vec::new();
+        for i in 0..5 {
+            expanded.push(dev_address(i).await);
+        }
+        consensus.chain_spec.update_live_signers(expanded);
+
+        // After epoch: signer 3 and 4 should now be accepted
+        let header = build_signed_header(10, 3).await;
+        let sealed = SealedHeader::seal_slow(header);
+        let result: Result<(), ConsensusError> =
+            HeaderValidator::validate_header(&consensus, &sealed);
+        assert!(result.is_ok(), "Signer 3 should be accepted after epoch update");
+
+        let header = build_signed_header(11, 4).await;
+        let sealed = SealedHeader::seal_slow(header);
+        let result: Result<(), ConsensusError> =
+            HeaderValidator::validate_header(&consensus, &sealed);
+        assert!(result.is_ok(), "Signer 4 should be accepted after epoch update");
+    }
+
+    #[tokio::test]
+    async fn test_multi_node_signer_removal_at_epoch() {
+        // Start with 5 signers, at epoch block remove signers 3 and 4
+        let mut all_addrs = Vec::new();
+        for i in 0..5 {
+            all_addrs.push(dev_address(i).await);
+        }
+
+        let consensus = consensus_with_signers(all_addrs.clone());
+
+        // Pre-epoch: signer 4 produces a block successfully
+        let header = build_signed_header(4, 4).await;
+        let sealed = SealedHeader::seal_slow(header);
+        let result: Result<(), ConsensusError> =
+            HeaderValidator::validate_header(&consensus, &sealed);
+        assert!(result.is_ok(), "Signer 4 should be valid before removal");
+
+        // Simulate signer removal at epoch: only signers 0-2 remain
+        let mut reduced = Vec::new();
+        for i in 0..3 {
+            reduced.push(dev_address(i).await);
+        }
+        consensus.chain_spec.update_live_signers(reduced);
+
+        // After epoch: signer 4 should be rejected
+        let header = build_signed_header(11, 4).await;
+        let sealed = SealedHeader::seal_slow(header);
+        let result: Result<(), ConsensusError> =
+            HeaderValidator::validate_header(&consensus, &sealed);
+        assert!(result.is_err(), "Removed signer 4 should be rejected");
+    }
+
+    #[tokio::test]
+    async fn test_multi_node_fork_choice_prefers_in_turn() {
+        let consensus = production_consensus();
+
+        // Chain A: signer 0 produces all blocks (some in-turn, some out-of-turn)
+        let mut chain_a = Vec::new();
+        for i in 0u64..6 {
+            chain_a.push(build_signed_header(i, 0).await);
+        }
+
+        // Chain B: proper round-robin (all in-turn)
+        let mut chain_b = Vec::new();
+        for i in 0u64..6 {
+            let signer_idx = (i as usize) % 3;
+            chain_b.push(build_signed_header(i, signer_idx).await);
+        }
+
+        // Score: chain_a has 2 in-turn blocks (0, 3), chain_b has 6 in-turn
+        let score_a = consensus.score_chain(&chain_a);
+        let score_b = consensus.score_chain(&chain_b);
+        assert!(score_b > score_a, "Round-robin chain should score higher");
+
+        // Fork choice should prefer chain B
+        assert_eq!(
+            consensus.compare_chains(&chain_b, &chain_a),
+            std::cmp::Ordering::Greater,
+            "Round-robin chain should be preferred"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_multi_node_double_sign_detection() {
+        // Two different blocks at the same height by the same signer
+        let consensus = production_consensus();
+
+        // Block A at height 1 by signer 0
+        let header_a = Header {
+            number: 1,
+            gas_limit: 30_000_000,
+            timestamp: 1002,
+            extra_data: vec![0u8; EXTRA_VANITY_LENGTH + EXTRA_SEAL_LENGTH].into(),
+            ..Default::default()
+        };
+
+        // Block B at height 1 by signer 0 (different state root)
+        let header_b = Header {
+            number: 1,
+            gas_limit: 30_000_000,
+            timestamp: 1002,
+            state_root: B256::from([0x11; 32]),
+            extra_data: vec![0u8; EXTRA_VANITY_LENGTH + EXTRA_SEAL_LENGTH].into(),
+            ..Default::default()
+        };
+
+        let mgr = Arc::new(SignerManager::new());
+        let addr = mgr.add_signer_from_hex(dev::DEV_PRIVATE_KEYS[0]).await.unwrap();
+        let sealer = BlockSealer::new(mgr);
+
+        let signed_a = sealer.seal_header(header_a, &addr).await.unwrap();
+        let signed_b = sealer.seal_header(header_b, &addr).await.unwrap();
+
+        // Both blocks are individually valid
+        let sealed_a = SealedHeader::seal_slow(signed_a.clone());
+        let sealed_b = SealedHeader::seal_slow(signed_b.clone());
+
+        let result_a: Result<(), ConsensusError> =
+            HeaderValidator::validate_header(&consensus, &sealed_a);
+        let result_b: Result<(), ConsensusError> =
+            HeaderValidator::validate_header(&consensus, &sealed_b);
+
+        assert!(result_a.is_ok());
+        assert!(result_b.is_ok());
+
+        // But they have different hashes (different state_root → different seal_hash → different sig)
+        assert_ne!(sealed_a.hash(), sealed_b.hash(),
+            "Double-signed blocks at same height should have different hashes");
+
+        // Recover signer from both — same signer produced both (double signing evidence)
+        let signer_a = consensus.recover_signer(&signed_a).unwrap();
+        let signer_b = consensus.recover_signer(&signed_b).unwrap();
+        assert_eq!(signer_a, signer_b, "Same signer produced both blocks");
+        assert_eq!(signer_a, addr);
+    }
+
+    #[tokio::test]
+    async fn test_multi_node_chain_reorganization() {
+        let consensus = production_consensus();
+
+        // Common prefix: blocks 1-3 (round-robin)
+        let mut common = Vec::new();
+        let mut prev_hash = B256::ZERO;
+        for i in 1u64..=3 {
+            let signer_idx = (i as usize) % 3;
+            let mgr = Arc::new(SignerManager::new());
+            let addr = mgr.add_signer_from_hex(dev::DEV_PRIVATE_KEYS[signer_idx]).await.unwrap();
+            let sealer = BlockSealer::new(mgr);
+            let header = Header {
+                number: i,
+                parent_hash: prev_hash,
+                gas_limit: 30_000_000,
+                timestamp: 1000 + i * 2,
+                extra_data: vec![0u8; EXTRA_VANITY_LENGTH + EXTRA_SEAL_LENGTH].into(),
+                ..Default::default()
+            };
+            let signed = sealer.seal_header(header, &addr).await.unwrap();
+            let sealed = SealedHeader::seal_slow(signed.clone());
+            prev_hash = sealed.hash();
+            common.push(signed);
+        }
+
+        // Fork A: blocks 4-6, all by signer 0 (out-of-turn for 4 and 5)
+        let mut fork_a = Vec::new();
+        let mut hash_a = prev_hash;
+        for i in 4u64..=6 {
+            let mgr = Arc::new(SignerManager::new());
+            let addr = mgr.add_signer_from_hex(dev::DEV_PRIVATE_KEYS[0]).await.unwrap();
+            let sealer = BlockSealer::new(mgr);
+            let header = Header {
+                number: i,
+                parent_hash: hash_a,
+                gas_limit: 30_000_000,
+                timestamp: 1000 + i * 2,
+                extra_data: vec![0u8; EXTRA_VANITY_LENGTH + EXTRA_SEAL_LENGTH].into(),
+                ..Default::default()
+            };
+            let signed = sealer.seal_header(header, &addr).await.unwrap();
+            let sealed = SealedHeader::seal_slow(signed.clone());
+            hash_a = sealed.hash();
+            fork_a.push(signed);
+        }
+
+        // Fork B: blocks 4-6, proper round-robin (all in-turn)
+        let mut fork_b = Vec::new();
+        let mut hash_b = prev_hash;
+        for i in 4u64..=6 {
+            let signer_idx = (i as usize) % 3;
+            let mgr = Arc::new(SignerManager::new());
+            let addr = mgr.add_signer_from_hex(dev::DEV_PRIVATE_KEYS[signer_idx]).await.unwrap();
+            let sealer = BlockSealer::new(mgr);
+            let header = Header {
+                number: i,
+                parent_hash: hash_b,
+                gas_limit: 30_000_000,
+                timestamp: 1000 + i * 2,
+                extra_data: vec![0u8; EXTRA_VANITY_LENGTH + EXTRA_SEAL_LENGTH].into(),
+                ..Default::default()
+            };
+            let signed = sealer.seal_header(header, &addr).await.unwrap();
+            let sealed = SealedHeader::seal_slow(signed.clone());
+            hash_b = sealed.hash();
+            fork_b.push(signed);
+        }
+
+        // Both forks are valid
+        for h in &fork_a {
+            let sealed = SealedHeader::seal_slow(h.clone());
+            let r: Result<(), ConsensusError> = HeaderValidator::validate_header(&consensus, &sealed);
+            assert!(r.is_ok(), "Fork A block should be valid");
+        }
+        for h in &fork_b {
+            let sealed = SealedHeader::seal_slow(h.clone());
+            let r: Result<(), ConsensusError> = HeaderValidator::validate_header(&consensus, &sealed);
+            assert!(r.is_ok(), "Fork B block should be valid");
+        }
+
+        // Fork choice: B should win (more in-turn blocks)
+        let score_a = consensus.score_chain(&fork_a);
+        let score_b = consensus.score_chain(&fork_b);
+        assert!(score_b > score_a, "Fork B (round-robin) should score higher than Fork A (single signer)");
     }
 }

@@ -3,58 +3,18 @@
 //! Custom RPC methods for querying chain configuration, signer info,
 //! and node status. Registered as the `meow_*` namespace.
 
+pub mod api;
+pub mod types;
+
+pub use api::MeowApiServer;
+pub use types::{ChainConfigResponse, NodeInfoResponse};
+
 use crate::chainspec::PoaChainSpec;
 use crate::genesis::{
     CHAIN_CONFIG_ADDRESS, GOVERNANCE_SAFE_ADDRESS, SIGNER_REGISTRY_ADDRESS, TREASURY_ADDRESS,
 };
 use crate::signer::SignerManager;
-use alloy_primitives::Address;
-use jsonrpsee::{core::RpcResult, proc_macros::rpc};
-use serde::Serialize;
 use std::sync::Arc;
-
-/// Response for `meow_chainConfig`
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ChainConfigResponse {
-    pub chain_id: u64,
-    pub gas_limit: u64,
-    pub block_time: u64,
-    pub epoch: u64,
-    pub signer_count: usize,
-    pub governance_safe: Address,
-    pub chain_config_contract: Address,
-    pub signer_registry_contract: Address,
-    pub treasury_contract: Address,
-}
-
-/// Response for `meow_nodeInfo`
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct NodeInfoResponse {
-    pub chain_id: u64,
-    pub dev_mode: bool,
-    pub signer_count: usize,
-    pub local_signer_count: usize,
-    pub local_signers: Vec<Address>,
-    pub authorized_signers: Vec<Address>,
-}
-
-/// The `meow_*` RPC namespace definition.
-#[rpc(server, namespace = "meow")]
-pub trait MeowApi {
-    /// Returns the current chain configuration parameters.
-    #[method(name = "chainConfig")]
-    async fn chain_config(&self) -> RpcResult<ChainConfigResponse>;
-
-    /// Returns the list of authorized POA signers.
-    #[method(name = "signers")]
-    async fn signers(&self) -> RpcResult<Vec<Address>>;
-
-    /// Returns node information including local signer status.
-    #[method(name = "nodeInfo")]
-    async fn node_info(&self) -> RpcResult<NodeInfoResponse>;
-}
 
 /// Implementation of the `meow_*` RPC namespace.
 pub struct MeowRpc {
@@ -76,7 +36,7 @@ impl MeowRpc {
 
 #[async_trait::async_trait]
 impl MeowApiServer for MeowRpc {
-    async fn chain_config(&self) -> RpcResult<ChainConfigResponse> {
+    async fn chain_config(&self) -> jsonrpsee::core::RpcResult<ChainConfigResponse> {
         Ok(ChainConfigResponse {
             chain_id: self.chain_spec.inner().chain.id(),
             gas_limit: self.chain_spec.inner().genesis().gas_limit,
@@ -90,11 +50,11 @@ impl MeowApiServer for MeowRpc {
         })
     }
 
-    async fn signers(&self) -> RpcResult<Vec<Address>> {
+    async fn signers(&self) -> jsonrpsee::core::RpcResult<Vec<alloy_primitives::Address>> {
         Ok(self.chain_spec.signers().to_vec())
     }
 
-    async fn node_info(&self) -> RpcResult<NodeInfoResponse> {
+    async fn node_info(&self) -> jsonrpsee::core::RpcResult<NodeInfoResponse> {
         let local_signers = self.signer_manager.signer_addresses().await;
         let authorized = self.chain_spec.signers();
 

@@ -15,143 +15,27 @@
 //!
 //! Storage layout must match genesis.rs pre-population and the Solidity contracts.
 
-use alloy_primitives::{keccak256, Address, Keccak256, B256, U256};
-use crate::genesis::{CHAIN_CONFIG_ADDRESS, SIGNER_REGISTRY_ADDRESS};
+pub mod helpers;
+pub mod providers;
+pub mod readers;
+pub mod selectors;
+pub mod slots;
 
-// =============================================================================
-// Storage Slot Constants — must match Solidity storage layout
-// =============================================================================
+// Re-export the StorageReader trait and key types at module level
+pub use helpers::{
+    decode_address, decode_bool, decode_u64, dynamic_array_base_slot, encode_address, encode_u64,
+    mapping_address_bool_slot,
+};
+pub use providers::{GenesisStorageReader, StateProviderStorageReader};
+pub use readers::{
+    is_signer_on_chain, is_timelock_paused, read_block_time, read_chain_config, read_gas_limit,
+    read_signer_list, read_timelock_delay, read_timelock_proposer, DynamicChainConfig,
+    DynamicSignerList,
+};
+pub use selectors::function_selector;
+pub use slots::{chain_config_slots, signer_registry_slots, timelock_slots};
 
-/// ChainConfig contract storage layout.
-///
-/// Matches `contracts/ChainConfig.sol` and `genesis.rs:governance_contract_alloc`.
-pub mod chain_config_slots {
-    use alloy_primitives::U256;
-
-    /// slot 0: governance (address)
-    pub const GOVERNANCE: U256 = U256::from_limbs([0, 0, 0, 0]);
-    /// slot 1: gasLimit (uint256)
-    pub const GAS_LIMIT: U256 = U256::from_limbs([1, 0, 0, 0]);
-    /// slot 2: blockTime (uint256)
-    pub const BLOCK_TIME: U256 = U256::from_limbs([2, 0, 0, 0]);
-    /// slot 3: maxContractSize (uint256)
-    pub const MAX_CONTRACT_SIZE: U256 = U256::from_limbs([3, 0, 0, 0]);
-    /// slot 4: calldataGasPerByte (uint256)
-    pub const CALLDATA_GAS_PER_BYTE: U256 = U256::from_limbs([4, 0, 0, 0]);
-    /// slot 5: maxTxGas (uint256)
-    pub const MAX_TX_GAS: U256 = U256::from_limbs([5, 0, 0, 0]);
-    /// slot 6: eagerMining (bool)
-    pub const EAGER_MINING: U256 = U256::from_limbs([6, 0, 0, 0]);
-}
-
-/// SignerRegistry contract storage layout.
-///
-/// Matches `contracts/SignerRegistry.sol` and `genesis.rs:governance_contract_alloc`.
-pub mod signer_registry_slots {
-    use alloy_primitives::U256;
-
-    /// slot 0: governance (address)
-    pub const GOVERNANCE: U256 = U256::from_limbs([0, 0, 0, 0]);
-    /// slot 1: signers.length (dynamic array length)
-    pub const SIGNERS_LENGTH: U256 = U256::from_limbs([1, 0, 0, 0]);
-    /// slot 2: isSigner mapping base (mapping(address => bool))
-    pub const IS_SIGNER_MAPPING: U256 = U256::from_limbs([2, 0, 0, 0]);
-    /// slot 3: signerThreshold (uint256)
-    pub const SIGNER_THRESHOLD: U256 = U256::from_limbs([3, 0, 0, 0]);
-}
-
-// =============================================================================
-// ABI Function Selectors — for eth_call interface
-// =============================================================================
-
-/// Compute the Solidity function selector (first 4 bytes of keccak256(signature)).
-pub fn function_selector(signature: &str) -> [u8; 4] {
-    let hash = keccak256(signature.as_bytes());
-    let mut selector = [0u8; 4];
-    selector.copy_from_slice(&hash[..4]);
-    selector
-}
-
-/// Pre-computed ABI function selectors for governance contract view functions.
-pub mod selectors {
-    use super::function_selector;
-
-    // ChainConfig getters
-    pub fn gas_limit() -> [u8; 4] { function_selector("gasLimit()") }
-    pub fn block_time() -> [u8; 4] { function_selector("blockTime()") }
-    pub fn max_contract_size() -> [u8; 4] { function_selector("maxContractSize()") }
-    pub fn calldata_gas_per_byte() -> [u8; 4] { function_selector("calldataGasPerByte()") }
-    pub fn max_tx_gas() -> [u8; 4] { function_selector("maxTxGas()") }
-    pub fn eager_mining() -> [u8; 4] { function_selector("eagerMining()") }
-    pub fn governance() -> [u8; 4] { function_selector("governance()") }
-
-    // SignerRegistry getters
-    pub fn get_signers() -> [u8; 4] { function_selector("getSigners()") }
-    pub fn signer_count() -> [u8; 4] { function_selector("signerCount()") }
-    pub fn signer_threshold() -> [u8; 4] { function_selector("signerThreshold()") }
-    pub fn is_signer() -> [u8; 4] { function_selector("isSigner(address)") }
-}
-
-// =============================================================================
-// Storage Reading Helpers
-// =============================================================================
-
-/// Compute the base slot for a Solidity dynamic array's data.
-///
-/// For `address[] public signers` at slot 1:
-///   base = keccak256(abi.encode(1))
-///   signers[0] lives at base + 0
-///   signers[1] lives at base + 1
-///   etc.
-pub fn dynamic_array_base_slot(array_slot: U256) -> U256 {
-    let mut hasher = Keccak256::new();
-    hasher.update(B256::from(array_slot.to_be_bytes()).as_slice());
-    U256::from_be_bytes(hasher.finalize().0)
-}
-
-/// Compute the storage slot for a Solidity `mapping(address => bool)` entry.
-///
-/// For `isSigner[addr]` at mapping slot 2:
-///   slot = keccak256(abi.encode(addr, 2))
-pub fn mapping_address_bool_slot(key: Address, mapping_slot: U256) -> B256 {
-    let mut hasher = Keccak256::new();
-    let mut key_padded = [0u8; 32];
-    key_padded[12..32].copy_from_slice(key.as_slice());
-    hasher.update(&key_padded);
-    hasher.update(B256::from(mapping_slot.to_be_bytes()).as_slice());
-    hasher.finalize()
-}
-
-/// Decode an address from a B256 storage value (left-padded with zeros).
-pub fn decode_address(value: B256) -> Address {
-    Address::from_slice(&value[12..32])
-}
-
-/// Decode a u64 from a B256 storage value.
-pub fn decode_u64(value: B256) -> u64 {
-    U256::from_be_bytes(value.0).as_limbs()[0]
-}
-
-/// Decode a bool from a B256 storage value.
-pub fn decode_bool(value: B256) -> bool {
-    value[31] != 0
-}
-
-/// Encode a u64 value into a B256 storage value.
-pub fn encode_u64(value: u64) -> B256 {
-    B256::from(U256::from(value).to_be_bytes())
-}
-
-/// Encode an address into a B256 storage value (left-padded).
-pub fn encode_address(addr: Address) -> B256 {
-    let mut bytes = [0u8; 32];
-    bytes[12..32].copy_from_slice(addr.as_slice());
-    B256::from(bytes)
-}
-
-// =============================================================================
-// StorageReader trait — abstracts storage access for testing
-// =============================================================================
+use alloy_primitives::{Address, B256, U256};
 
 /// Trait for reading contract storage slots.
 ///
@@ -163,202 +47,14 @@ pub trait StorageReader {
     fn read_storage(&self, address: Address, slot: U256) -> Option<B256>;
 }
 
-// =============================================================================
-// DynamicChainConfig — runtime chain parameters
-// =============================================================================
-
-/// Dynamic chain configuration read from the on-chain ChainConfig contract.
-///
-/// Replaces hardcoded values from genesis/CLI with governance-controlled parameters.
-/// Updated via: Governance Safe → ChainConfig.setGasLimit(300_000_000)
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DynamicChainConfig {
-    /// Governance address (the Safe multisig)
-    pub governance: Address,
-    /// Block gas limit (default: 30_000_000)
-    pub gas_limit: u64,
-    /// Block interval in seconds (default: 2)
-    pub block_time: u64,
-    /// Max contract bytecode size (default: 24_576)
-    pub max_contract_size: u64,
-    /// Calldata gas cost per byte (default: 16)
-    pub calldata_gas_per_byte: u64,
-    /// Max gas per transaction (default: gasLimit)
-    pub max_tx_gas: u64,
-    /// Mine on tx arrival vs interval (default: false)
-    pub eager_mining: bool,
-}
-
-/// Dynamic signer list read from the on-chain SignerRegistry contract.
-///
-/// Updated via: Governance Safe → SignerRegistry.addSigner(addr)
-/// Changes take effect at the next epoch block.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DynamicSignerList {
-    /// Governance address (the Safe multisig)
-    pub governance: Address,
-    /// Ordered list of authorized signers
-    pub signers: Vec<Address>,
-    /// Minimum signers for chain liveness
-    pub threshold: u64,
-}
-
-// =============================================================================
-// Reading functions
-// =============================================================================
-
-/// Read the full ChainConfig from on-chain storage.
-///
-/// This is called by PoaPayloadBuilder at each block to get the current gas limit
-/// and other parameters. The Governance Safe can change these live via transactions.
-pub fn read_chain_config(reader: &impl StorageReader) -> Option<DynamicChainConfig> {
-    let addr = CHAIN_CONFIG_ADDRESS;
-
-    let governance_val = reader.read_storage(addr, chain_config_slots::GOVERNANCE)?;
-    let gas_limit_val = reader.read_storage(addr, chain_config_slots::GAS_LIMIT)?;
-    let block_time_val = reader.read_storage(addr, chain_config_slots::BLOCK_TIME)?;
-    let max_contract_size_val = reader.read_storage(addr, chain_config_slots::MAX_CONTRACT_SIZE)?;
-    let calldata_gas_val = reader.read_storage(addr, chain_config_slots::CALLDATA_GAS_PER_BYTE)?;
-    let max_tx_gas_val = reader.read_storage(addr, chain_config_slots::MAX_TX_GAS)?;
-    let eager_mining_val = reader
-        .read_storage(addr, chain_config_slots::EAGER_MINING)
-        .unwrap_or(B256::ZERO);
-
-    Some(DynamicChainConfig {
-        governance: decode_address(governance_val),
-        gas_limit: decode_u64(gas_limit_val),
-        block_time: decode_u64(block_time_val),
-        max_contract_size: decode_u64(max_contract_size_val),
-        calldata_gas_per_byte: decode_u64(calldata_gas_val),
-        max_tx_gas: decode_u64(max_tx_gas_val),
-        eager_mining: decode_bool(eager_mining_val),
-    })
-}
-
-/// Read just the gas limit from ChainConfig (hot path for payload builder).
-pub fn read_gas_limit(reader: &impl StorageReader) -> Option<u64> {
-    reader
-        .read_storage(CHAIN_CONFIG_ADDRESS, chain_config_slots::GAS_LIMIT)
-        .map(|v| decode_u64(v))
-}
-
-/// Read just the block time from ChainConfig.
-pub fn read_block_time(reader: &impl StorageReader) -> Option<u64> {
-    reader
-        .read_storage(CHAIN_CONFIG_ADDRESS, chain_config_slots::BLOCK_TIME)
-        .map(|v| decode_u64(v))
-}
-
-/// Read the full signer list from SignerRegistry storage.
-///
-/// This is called by PoaConsensus at epoch blocks to update the authorized
-/// signer list. Changes propagate on-chain without node restart.
-pub fn read_signer_list(reader: &impl StorageReader) -> Option<DynamicSignerList> {
-    let addr = SIGNER_REGISTRY_ADDRESS;
-
-    let governance_val = reader.read_storage(addr, signer_registry_slots::GOVERNANCE)?;
-    let length_val = reader.read_storage(addr, signer_registry_slots::SIGNERS_LENGTH)?;
-    let threshold_val = reader.read_storage(addr, signer_registry_slots::SIGNER_THRESHOLD)?;
-
-    let signer_count = decode_u64(length_val) as usize;
-    let base_slot = dynamic_array_base_slot(signer_registry_slots::SIGNERS_LENGTH);
-
-    let mut signers = Vec::with_capacity(signer_count);
-    for i in 0..signer_count {
-        let slot = base_slot + U256::from(i);
-        if let Some(val) = reader.read_storage(addr, slot) {
-            signers.push(decode_address(val));
-        }
-    }
-
-    Some(DynamicSignerList {
-        governance: decode_address(governance_val),
-        signers,
-        threshold: decode_u64(threshold_val),
-    })
-}
-
-/// Check if a specific address is a signer via the on-chain mapping.
-pub fn is_signer_on_chain(reader: &impl StorageReader, address: Address) -> bool {
-    let slot_hash = mapping_address_bool_slot(address, signer_registry_slots::IS_SIGNER_MAPPING);
-    let slot = U256::from_be_bytes(slot_hash.0);
-    reader
-        .read_storage(SIGNER_REGISTRY_ADDRESS, slot)
-        .map(|val| decode_bool(val))
-        .unwrap_or(false)
-}
-
-// =============================================================================
-// StateProviderStorageReader — bridges live Reth StateProvider to StorageReader
-// =============================================================================
-
-/// Wraps a Reth `StateProvider` reference to implement the `StorageReader` trait.
-///
-/// This is the production adapter that reads from the live MDBX database at runtime.
-/// Used by `PoaPayloadBuilder` to read `ChainConfig` and `SignerRegistry` contracts
-/// at each block, enabling live governance updates without node restart.
-///
-/// # Usage
-/// ```ignore
-/// let state = provider.latest()?;
-/// let reader = StateProviderStorageReader(state.as_ref());
-/// let gas_limit = read_gas_limit(&reader);
-/// let signers   = read_signer_list(&reader);
-/// ```
-pub struct StateProviderStorageReader<'a>(pub &'a dyn reth_storage_api::StateProvider);
-
-impl<'a> StorageReader for StateProviderStorageReader<'a> {
-    fn read_storage(&self, address: Address, slot: U256) -> Option<B256> {
-        // Convert U256 slot to B256 storage key (big-endian, Solidity layout)
-        let key = B256::from(slot.to_be_bytes());
-        self.0
-            .storage(address, key)
-            .ok()
-            .flatten()
-            .map(|v| B256::from(v.to_be_bytes()))
-    }
-}
-
-// =============================================================================
-// GenesisStorageReader — reads from genesis alloc for testing
-// =============================================================================
-
-/// A StorageReader that reads from the genesis configuration's alloc.
-///
-/// This lets us verify that the on-chain readers produce the correct values
-/// when reading the pre-populated genesis storage, without needing a running node.
-pub struct GenesisStorageReader {
-    /// The genesis configuration to read from
-    alloc: std::collections::BTreeMap<Address, alloy_genesis::GenesisAccount>,
-}
-
-impl GenesisStorageReader {
-    /// Create a reader from a genesis configuration.
-    pub fn from_genesis(genesis: &alloy_genesis::Genesis) -> Self {
-        Self { alloc: genesis.alloc.clone() }
-    }
-}
-
-impl StorageReader for GenesisStorageReader {
-    fn read_storage(&self, address: Address, slot: U256) -> Option<B256> {
-        let account = self.alloc.get(&address)?;
-        let storage = account.storage.as_ref()?;
-        let slot_key = B256::from(slot.to_be_bytes());
-        storage.get(&slot_key).copied()
-    }
-}
-
-// =============================================================================
-// Tests
-// =============================================================================
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::genesis::{
-        create_dev_genesis, create_genesis, dev_accounts, dev_signers,
-        GenesisConfig, GOVERNANCE_SAFE_ADDRESS,
+        create_dev_genesis, create_genesis, dev_accounts, dev_signers, GenesisConfig,
+        CHAIN_CONFIG_ADDRESS, GOVERNANCE_SAFE_ADDRESS, SIGNER_REGISTRY_ADDRESS, TIMELOCK_ADDRESS,
     };
+    use alloy_primitives::Keccak256;
     use std::collections::BTreeMap;
 
     // =========================================================================
@@ -414,11 +110,8 @@ mod tests {
 
     #[test]
     fn test_function_selector_computation() {
-        // Known Solidity selectors (verified against solc output)
-        // gasLimit() → 0xf68d4018
         let gas_limit_sel = function_selector("gasLimit()");
         assert_eq!(gas_limit_sel.len(), 4);
-        // The selector should be deterministic
         assert_eq!(gas_limit_sel, function_selector("gasLimit()"));
     }
 
@@ -431,7 +124,6 @@ mod tests {
         let get_signers = selectors::get_signers();
         let signer_count = selectors::signer_count();
 
-        // All selectors should be unique
         let all = vec![gas_limit, block_time, max_contract_size, governance, get_signers, signer_count];
         for i in 0..all.len() {
             for j in (i + 1)..all.len() {
@@ -490,7 +182,6 @@ mod tests {
     fn test_decode_bool_true_and_false() {
         assert!(!decode_bool(B256::ZERO));
         assert!(decode_bool(B256::from(U256::from(1).to_be_bytes())));
-        // Non-zero last byte is true
         let mut b = [0u8; 32];
         b[31] = 0xFF;
         assert!(decode_bool(B256::from(b)));
@@ -500,9 +191,7 @@ mod tests {
     fn test_encode_address_is_left_padded() {
         let addr = dev_accounts()[0];
         let encoded = encode_address(addr);
-        // First 12 bytes should be zero
         assert_eq!(&encoded[..12], &[0u8; 12]);
-        // Last 20 bytes should be the address
         assert_eq!(&encoded[12..32], addr.as_slice());
     }
 
@@ -512,12 +201,6 @@ mod tests {
 
     #[test]
     fn test_dynamic_array_base_slot_matches_genesis() {
-        // genesis.rs computes the same thing for SignerRegistry signers array:
-        //   let mut hasher = Keccak256::new();
-        //   hasher.update(B256::from(U256::from(1u64).to_be_bytes()).as_slice());
-        //   let array_base = U256::from_be_bytes(hasher.finalize().0);
-        //
-        // Our function should produce the same result
         let our_base = dynamic_array_base_slot(U256::from(1));
 
         let mut hasher = Keccak256::new();
@@ -547,15 +230,6 @@ mod tests {
 
     #[test]
     fn test_mapping_slot_matches_genesis() {
-        // genesis.rs computes isSigner[addr] mapping slots the same way:
-        //   let mut hasher = Keccak256::new();
-        //   let mut key_padded = [0u8; 32];
-        //   key_padded[12..32].copy_from_slice(signer.as_slice());
-        //   hasher.update(&key_padded);
-        //   hasher.update(B256::from(U256::from(2u64).to_be_bytes()).as_slice());
-        //   let mapping_slot = hasher.finalize();
-        //
-        // Our function should produce the same result
         let signer = dev_signers()[0];
         let our_slot = mapping_address_bool_slot(signer, U256::from(2));
 
@@ -653,7 +327,6 @@ mod tests {
         mock.set(SIGNER_REGISTRY_ADDRESS, signer_registry_slots::SIGNERS_LENGTH, encode_u64(3));
         mock.set(SIGNER_REGISTRY_ADDRESS, signer_registry_slots::SIGNER_THRESHOLD, encode_u64(2));
 
-        // Set dynamic array entries
         let base = dynamic_array_base_slot(signer_registry_slots::SIGNERS_LENGTH);
         for (i, signer) in signers.iter().enumerate() {
             mock.set(SIGNER_REGISTRY_ADDRESS, base + U256::from(i), encode_address(*signer));
@@ -682,20 +355,16 @@ mod tests {
         let mut mock = MockStorage::new();
         let signer = dev_signers()[0];
 
-        // Set isSigner[signer] = true
         let slot_hash = mapping_address_bool_slot(signer, signer_registry_slots::IS_SIGNER_MAPPING);
         let slot = U256::from_be_bytes(slot_hash.0);
         mock.set(SIGNER_REGISTRY_ADDRESS, slot, encode_u64(1));
 
         assert!(is_signer_on_chain(&mock, signer));
-        // Unknown address should return false
         assert!(!is_signer_on_chain(&mock, dev_accounts()[5]));
     }
 
     // =========================================================================
-    // GenesisStorageReader tests — THE critical integration tests
-    // These verify that our reader correctly reads the values that genesis.rs
-    // pre-populates in the contract storage.
+    // GenesisStorageReader tests
     // =========================================================================
 
     #[test]
@@ -739,7 +408,7 @@ mod tests {
         assert_eq!(list.governance, GOVERNANCE_SAFE_ADDRESS);
         assert_eq!(list.signers.len(), 3);
         assert_eq!(list.signers, dev_signers());
-        assert_eq!(list.threshold, 2); // 3/2 + 1 = 2
+        assert_eq!(list.threshold, 2);
     }
 
     #[test]
@@ -752,14 +421,13 @@ mod tests {
         assert_eq!(list.governance, GOVERNANCE_SAFE_ADDRESS);
         assert_eq!(list.signers.len(), 5);
         assert_eq!(list.signers, dev_accounts().into_iter().take(5).collect::<Vec<_>>());
-        assert_eq!(list.threshold, 3); // 5/2 + 1 = 3
+        assert_eq!(list.threshold, 3);
     }
 
     #[test]
     fn test_genesis_reader_gas_limit_shortcut() {
         let genesis = create_dev_genesis();
         let reader = GenesisStorageReader::from_genesis(&genesis);
-
         assert_eq!(read_gas_limit(&reader), Some(30_000_000));
     }
 
@@ -767,7 +435,6 @@ mod tests {
     fn test_genesis_reader_block_time_shortcut() {
         let genesis = create_dev_genesis();
         let reader = GenesisStorageReader::from_genesis(&genesis);
-
         assert_eq!(read_block_time(&reader), Some(2));
     }
 
@@ -776,7 +443,6 @@ mod tests {
         let genesis = create_dev_genesis();
         let reader = GenesisStorageReader::from_genesis(&genesis);
 
-        // All 3 dev signers should be registered
         for signer in dev_signers() {
             assert!(
                 is_signer_on_chain(&reader, signer),
@@ -785,7 +451,6 @@ mod tests {
             );
         }
 
-        // Non-signers should NOT be registered
         for account in dev_accounts().into_iter().skip(3) {
             assert!(
                 !is_signer_on_chain(&reader, account),
@@ -800,7 +465,6 @@ mod tests {
         let genesis = create_genesis(GenesisConfig::production());
         let reader = GenesisStorageReader::from_genesis(&genesis);
 
-        // First 5 accounts should be signers in production
         for account in dev_accounts().into_iter().take(5) {
             assert!(
                 is_signer_on_chain(&reader, account),
@@ -809,7 +473,6 @@ mod tests {
             );
         }
 
-        // Account 5+ should NOT be signers
         for account in dev_accounts().into_iter().skip(5) {
             assert!(
                 !is_signer_on_chain(&reader, account),
@@ -826,19 +489,19 @@ mod tests {
     #[test]
     fn test_genesis_reader_custom_gas_limit() {
         let mut config = GenesisConfig::dev();
-        config.gas_limit = 100_000_000; // 100M gas
+        config.gas_limit = 100_000_000;
         let genesis = create_genesis(config);
         let reader = GenesisStorageReader::from_genesis(&genesis);
 
         let chain_config = read_chain_config(&reader).unwrap();
         assert_eq!(chain_config.gas_limit, 100_000_000);
-        assert_eq!(chain_config.max_tx_gas, 100_000_000); // max_tx_gas = gas_limit in genesis
+        assert_eq!(chain_config.max_tx_gas, 100_000_000);
     }
 
     #[test]
     fn test_genesis_reader_custom_block_time() {
         let mut config = GenesisConfig::dev();
-        config.block_period = 1; // 1-second blocks
+        config.block_period = 1;
         let genesis = create_genesis(config);
         let reader = GenesisStorageReader::from_genesis(&genesis);
 
@@ -863,9 +526,8 @@ mod tests {
         let list = read_signer_list(&reader).unwrap();
         assert_eq!(list.signers.len(), 5);
         assert_eq!(list.signers, custom_signers);
-        assert_eq!(list.threshold, 3); // 5/2 + 1 = 3
+        assert_eq!(list.threshold, 3);
 
-        // Verify isSigner mapping
         for signer in &custom_signers {
             assert!(is_signer_on_chain(&reader, *signer));
         }
@@ -881,12 +543,12 @@ mod tests {
         let list = read_signer_list(&reader).unwrap();
         assert_eq!(list.signers.len(), 1);
         assert_eq!(list.signers[0], signer);
-        assert_eq!(list.threshold, 1); // 1/2 + 1 = 1
+        assert_eq!(list.threshold, 1);
         assert!(is_signer_on_chain(&reader, signer));
     }
 
     // =========================================================================
-    // Consistency tests — values from reader match genesis config
+    // Consistency tests
     // =========================================================================
 
     #[test]
@@ -907,16 +569,8 @@ mod tests {
             let reader = GenesisStorageReader::from_genesis(&genesis);
 
             let chain_config = read_chain_config(&reader).unwrap();
-            assert_eq!(
-                chain_config.gas_limit, gas_limit,
-                "Gas limit mismatch: expected {}, got {}",
-                gas_limit, chain_config.gas_limit
-            );
-            assert_eq!(
-                chain_config.block_time, block_time,
-                "Block time mismatch: expected {}, got {}",
-                block_time, chain_config.block_time
-            );
+            assert_eq!(chain_config.gas_limit, gas_limit);
+            assert_eq!(chain_config.block_time, block_time);
         }
     }
 
@@ -954,7 +608,6 @@ mod tests {
 
     #[test]
     fn test_dynamic_array_slot_0() {
-        // Even if array_slot is 0, it should compute without panicking
         let base = dynamic_array_base_slot(U256::ZERO);
         assert_ne!(base, U256::ZERO);
     }
@@ -972,8 +625,6 @@ mod tests {
     fn test_genesis_reader_nonexistent_slot() {
         let genesis = create_dev_genesis();
         let reader = GenesisStorageReader::from_genesis(&genesis);
-
-        // Slot 999 doesn't exist in ChainConfig
         assert_eq!(reader.read_storage(CHAIN_CONFIG_ADDRESS, U256::from(999)), None);
     }
 
@@ -1023,23 +674,16 @@ mod tests {
     }
 
     // =========================================================================
-    // Integration: simulate a governance parameter change
+    // Integration: simulate governance parameter changes
     // =========================================================================
 
     #[test]
     fn test_simulate_gas_limit_change() {
-        // Start with dev genesis
         let genesis = create_dev_genesis();
         let reader = GenesisStorageReader::from_genesis(&genesis);
-
-        // Original gas limit should be 30M
         assert_eq!(read_gas_limit(&reader), Some(30_000_000));
 
-        // Simulate governance calling ChainConfig.setGasLimit(300_000_000)
-        // by creating a mock with the updated value
         let mut mock = MockStorage::new();
-
-        // Copy all existing ChainConfig storage
         let chain_config_account = genesis.alloc.get(&CHAIN_CONFIG_ADDRESS).unwrap();
         if let Some(storage) = &chain_config_account.storage {
             for (key, value) in storage {
@@ -1047,32 +691,25 @@ mod tests {
                 mock.set(CHAIN_CONFIG_ADDRESS, slot, *value);
             }
         }
-
-        // Override gas limit: governance set it to 300M
         mock.set(CHAIN_CONFIG_ADDRESS, chain_config_slots::GAS_LIMIT, encode_u64(300_000_000));
 
-        // Now the reader should see the updated value
         let config = read_chain_config(&mock).unwrap();
         assert_eq!(config.gas_limit, 300_000_000);
-        // Other values should be unchanged
         assert_eq!(config.block_time, 2);
         assert_eq!(config.governance, GOVERNANCE_SAFE_ADDRESS);
     }
 
     #[test]
     fn test_simulate_signer_addition() {
-        // Start with dev genesis (3 signers)
         let genesis = create_dev_genesis();
         let reader = GenesisStorageReader::from_genesis(&genesis);
 
         let list = read_signer_list(&reader).unwrap();
         assert_eq!(list.signers.len(), 3);
 
-        // Simulate governance calling SignerRegistry.addSigner(new_signer)
-        let new_signer = dev_accounts()[3]; // 4th account
+        let new_signer = dev_accounts()[3];
         let mut mock = MockStorage::new();
 
-        // Copy existing SignerRegistry storage
         let sr_account = genesis.alloc.get(&SIGNER_REGISTRY_ADDRESS).unwrap();
         if let Some(storage) = &sr_account.storage {
             for (key, value) in storage {
@@ -1081,14 +718,11 @@ mod tests {
             }
         }
 
-        // Update: signers.length = 4
         mock.set(SIGNER_REGISTRY_ADDRESS, signer_registry_slots::SIGNERS_LENGTH, encode_u64(4));
 
-        // Add new signer to array at index 3
         let base = dynamic_array_base_slot(signer_registry_slots::SIGNERS_LENGTH);
         mock.set(SIGNER_REGISTRY_ADDRESS, base + U256::from(3), encode_address(new_signer));
 
-        // Set isSigner[new_signer] = true
         let is_signer_slot = mapping_address_bool_slot(new_signer, signer_registry_slots::IS_SIGNER_MAPPING);
         mock.set(
             SIGNER_REGISTRY_ADDRESS,
@@ -1096,7 +730,6 @@ mod tests {
             encode_u64(1),
         );
 
-        // Verify
         let updated_list = read_signer_list(&mock).unwrap();
         assert_eq!(updated_list.signers.len(), 4);
         assert_eq!(updated_list.signers[3], new_signer);
@@ -1107,11 +740,8 @@ mod tests {
     fn test_simulate_block_time_change_to_1_second() {
         let genesis = create_dev_genesis();
         let reader = GenesisStorageReader::from_genesis(&genesis);
-
-        // Original block time is 2s
         assert_eq!(read_block_time(&reader), Some(2));
 
-        // Simulate: Governance Safe → ChainConfig.setBlockTime(1)
         let mut mock = MockStorage::new();
         let chain_config_account = genesis.alloc.get(&CHAIN_CONFIG_ADDRESS).unwrap();
         if let Some(storage) = &chain_config_account.storage {
@@ -1123,7 +753,6 @@ mod tests {
         mock.set(CHAIN_CONFIG_ADDRESS, chain_config_slots::BLOCK_TIME, encode_u64(1));
 
         assert_eq!(read_block_time(&mock), Some(1));
-        // Gas limit unchanged
         assert_eq!(read_gas_limit(&mock), Some(30_000_000));
     }
 
@@ -1149,11 +778,54 @@ mod tests {
         let list = read_signer_list(&reader).unwrap();
         assert_eq!(list.signers.len(), 21);
         assert_eq!(list.signers, signers);
-        assert_eq!(list.threshold, 11); // 21/2 + 1 = 11
+        assert_eq!(list.threshold, 11);
 
-        // All should be registered as signers
         for signer in &signers {
             assert!(is_signer_on_chain(&reader, *signer));
         }
+    }
+
+    // =========================================================================
+    // Timelock tests
+    // =========================================================================
+
+    #[test]
+    fn test_read_timelock_delay_from_genesis() {
+        let genesis = create_dev_genesis();
+        let reader = GenesisStorageReader::from_genesis(&genesis);
+        let delay = read_timelock_delay(&reader);
+        assert_eq!(delay, Some(86400), "Timelock minDelay should be 86400 (24h)");
+    }
+
+    #[test]
+    fn test_read_timelock_proposer_from_genesis() {
+        let genesis = create_dev_genesis();
+        let reader = GenesisStorageReader::from_genesis(&genesis);
+        let proposer = read_timelock_proposer(&reader);
+        assert_eq!(proposer, Some(GOVERNANCE_SAFE_ADDRESS));
+    }
+
+    #[test]
+    fn test_timelock_not_paused_at_genesis() {
+        let genesis = create_dev_genesis();
+        let reader = GenesisStorageReader::from_genesis(&genesis);
+        assert!(!is_timelock_paused(&reader));
+    }
+
+    #[test]
+    fn test_read_timelock_delay_from_mock() {
+        let mut mock = MockStorage::new();
+        mock.set(TIMELOCK_ADDRESS, timelock_slots::MIN_DELAY, encode_u64(172800));
+        assert_eq!(read_timelock_delay(&mock), Some(172800));
+    }
+
+    #[test]
+    fn test_timelock_in_production_genesis() {
+        let config = GenesisConfig::production();
+        let genesis = create_genesis(config);
+        let reader = GenesisStorageReader::from_genesis(&genesis);
+        assert_eq!(read_timelock_delay(&reader), Some(86400));
+        assert_eq!(read_timelock_proposer(&reader), Some(GOVERNANCE_SAFE_ADDRESS));
+        assert!(!is_timelock_paused(&reader));
     }
 }

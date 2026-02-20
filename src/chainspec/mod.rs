@@ -3,41 +3,23 @@
 //! This module defines the chain specification for a POA network that maintains
 //! full compatibility with Ethereum mainnet's EVM and hardforks.
 
+pub mod config;
+pub mod hardforks;
+
+pub use config::PoaConfig;
+
 use alloy_consensus::Header;
 use alloy_eips::eip7840::BlobParams;
 use alloy_genesis::Genesis;
 use alloy_primitives::{Address, B256, U256};
 use reth_chainspec::{
-    BaseFeeParams, BaseFeeParamsKind, Chain, ChainHardforks, ChainSpec, DepositContract,
+    BaseFeeParams, BaseFeeParamsKind, Chain, ChainSpec, DepositContract,
     EthChainSpec, EthereumHardforks, ForkCondition, ForkFilter, ForkId, Hardfork, Hardforks, Head,
 };
 use reth_ethereum_forks::EthereumHardfork;
 use reth_network_peers::NodeRecord;
 use reth_primitives_traits::SealedHeader;
-use serde::{Deserialize, Serialize};
 use std::sync::{Arc, RwLock};
-
-/// POA-specific configuration that extends the standard chain config
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PoaConfig {
-    /// Block period in seconds (time between blocks)
-    pub period: u64,
-    /// Number of blocks after which to checkpoint and reset the pending votes
-    pub epoch: u64,
-    /// List of authorized signer addresses
-    pub signers: Vec<Address>,
-}
-
-impl Default for PoaConfig {
-    fn default() -> Self {
-        Self {
-            period: 12, // 12 second block time like mainnet
-            epoch: 30000,
-            signers: vec![],
-        }
-    }
-}
 
 /// Custom POA chain specification
 #[derive(Debug, Clone)]
@@ -50,13 +32,15 @@ pub struct PoaChainSpec {
     /// None = not yet synced from chain (falls back to poa_config.signers).
     /// Arc<RwLock<...>> so Clone shares the same live cache across consensus + payload.
     live_signers: Arc<RwLock<Option<Vec<Address>>>>,
+    /// Static bootnodes for P2P peer discovery.
+    boot_nodes: Vec<NodeRecord>,
 }
 
 impl PoaChainSpec {
     /// Creates a new POA chain spec from genesis and POA config
     pub fn new(genesis: Genesis, poa_config: PoaConfig) -> Self {
         // Build hardforks - enable all Ethereum hardforks for mainnet compatibility
-        let hardforks = Self::mainnet_compatible_hardforks();
+        let hardforks = hardforks::mainnet_compatible_hardforks();
 
         let genesis_header = reth_chainspec::make_genesis_header(&genesis, &hardforks);
 
@@ -77,6 +61,7 @@ impl PoaChainSpec {
             inner: Arc::new(inner),
             poa_config,
             live_signers: Arc::new(RwLock::new(None)),
+            boot_nodes: Vec::new(),
         }
     }
 
@@ -89,39 +74,6 @@ impl PoaChainSpec {
             signers: crate::genesis::dev_signers(),
         };
         Self::new(genesis, poa_config)
-    }
-
-    /// Creates hardforks configuration that matches Ethereum mainnet
-    /// This ensures full smart contract compatibility
-    fn mainnet_compatible_hardforks() -> ChainHardforks {
-        // Enable all hardforks at genesis (block 0 / timestamp 0)
-        // This gives you the latest Ethereum features immediately
-        ChainHardforks::new(vec![
-            // Block-based hardforks (all at block 0)
-            (EthereumHardfork::Frontier.boxed(), ForkCondition::Block(0)),
-            (EthereumHardfork::Homestead.boxed(), ForkCondition::Block(0)),
-            (EthereumHardfork::Tangerine.boxed(), ForkCondition::Block(0)),
-            (EthereumHardfork::SpuriousDragon.boxed(), ForkCondition::Block(0)),
-            (EthereumHardfork::Byzantium.boxed(), ForkCondition::Block(0)),
-            (EthereumHardfork::Constantinople.boxed(), ForkCondition::Block(0)),
-            (EthereumHardfork::Petersburg.boxed(), ForkCondition::Block(0)),
-            (EthereumHardfork::Istanbul.boxed(), ForkCondition::Block(0)),
-            (EthereumHardfork::Berlin.boxed(), ForkCondition::Block(0)),
-            (EthereumHardfork::London.boxed(), ForkCondition::Block(0)),
-            // The Merge - we use TTD of 0 since POA doesn't have proof of work
-            (
-                EthereumHardfork::Paris.boxed(),
-                ForkCondition::TTD {
-                    activation_block_number: 0,
-                    fork_block: None,
-                    total_difficulty: U256::ZERO,
-                },
-            ),
-            // Timestamp-based hardforks (all at timestamp 0)
-            (EthereumHardfork::Shanghai.boxed(), ForkCondition::Timestamp(0)),
-            (EthereumHardfork::Cancun.boxed(), ForkCondition::Timestamp(0)),
-            (EthereumHardfork::Prague.boxed(), ForkCondition::Timestamp(0)),
-        ])
     }
 
     /// Returns the inner ChainSpec
@@ -175,6 +127,12 @@ impl PoaChainSpec {
     /// Returns the epoch length
     pub fn epoch(&self) -> u64 {
         self.poa_config.epoch
+    }
+
+    /// Set static bootnodes for P2P peer discovery.
+    pub fn with_bootnodes(mut self, bootnodes: Vec<NodeRecord>) -> Self {
+        self.boot_nodes = bootnodes;
+        self
     }
 
     /// Check if an address is an authorized signer (uses live on-chain list if available).
@@ -260,7 +218,11 @@ impl EthChainSpec for PoaChainSpec {
     }
 
     fn bootnodes(&self) -> Option<Vec<NodeRecord>> {
-        self.inner.bootnodes()
+        if !self.boot_nodes.is_empty() {
+            Some(self.boot_nodes.clone())
+        } else {
+            self.inner.bootnodes()
+        }
     }
 
     fn final_paris_total_difficulty(&self) -> Option<U256> {
