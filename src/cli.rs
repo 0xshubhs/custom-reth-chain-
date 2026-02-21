@@ -9,8 +9,8 @@ pub struct Cli {
     #[arg(long, default_value = "9323310")]
     pub chain_id: u64,
 
-    /// Block production interval in seconds
-    #[arg(long, default_value = "2")]
+    /// Block production interval in seconds (Phase 2: default 1s for MegaETH-inspired throughput)
+    #[arg(long, default_value = "1")]
     pub block_time: u64,
 
     /// Data directory for chain storage
@@ -73,4 +73,24 @@ pub struct Cli {
     /// Disable P2P peer discovery (useful for single-node testing).
     #[arg(long)]
     pub disable_discovery: bool,
+
+    /// Maximum number of entries in the hot state cache (Phase 5).
+    /// Caches governance contract storage reads (gas limit, signer list, etc.).
+    /// Set to 0 to disable caching.
+    #[arg(long, default_value = "1024")]
+    pub cache_size: usize,
+
+    /// Enable block production performance metrics logging every N blocks.
+    /// Set to 0 to disable metrics output.
+    #[arg(long, default_value = "10")]
+    pub metrics_interval: u64,
+
+    /// Maximum deployed contract code size in bytes (Phase 2).
+    ///
+    /// Ethereum mainnet default is 24,576 bytes (EIP-170).
+    /// Increase to allow larger contracts (e.g. 524288 = 512KB).
+    /// Override is applied to the EVM via revm's `limit_contract_code_size`.
+    /// Set to 0 to use the Ethereum default (24,576 bytes).
+    #[arg(long, default_value = "0")]
+    pub max_contract_size: usize,
 }

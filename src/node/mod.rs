@@ -8,9 +8,10 @@ pub mod builder;
 pub mod engine;
 
 pub use builder::PoaConsensusBuilder;
-pub use engine::{PoaEngineValidator, PoaEngineValidatorBuilder, strip_extra_data};
+pub use engine::{strip_extra_data, PoaEngineValidator, PoaEngineValidatorBuilder};
 
 use crate::chainspec::PoaChainSpec;
+use crate::evm::PoaExecutorBuilder;
 use crate::payload::PoaPayloadBuilderBuilder;
 use crate::signer::SignerManager;
 use std::sync::Arc;
@@ -27,8 +28,8 @@ use reth_ethereum::node::api::{FullNodeComponents, PayloadAttributesBuilder};
 
 // Ethereum component builders (pool, network, executor, payload)
 use reth_ethereum::node::{
-    EthEngineTypes, EthereumAddOns, EthereumEthApiBuilder,
-    EthereumExecutorBuilder, EthereumNetworkBuilder, EthereumPoolBuilder,
+    EthEngineTypes, EthereumAddOns, EthereumEthApiBuilder, EthereumNetworkBuilder,
+    EthereumPoolBuilder,
 };
 
 // Primitive and storage types
@@ -62,6 +63,11 @@ pub struct PoaNode {
     signer_manager: Arc<SignerManager>,
     /// Whether the node runs in dev mode (relaxed consensus validation)
     dev_mode: bool,
+    /// Hot state cache capacity for governance reads (Phase 5.31).
+    cache_size: usize,
+    /// Maximum deployed contract code size override (Phase 2.11).
+    /// `None` = Ethereum default (24,576 bytes).
+    max_contract_size: Option<usize>,
 }
 
 impl PoaNode {
@@ -71,6 +77,8 @@ impl PoaNode {
             chain_spec,
             signer_manager: Arc::new(SignerManager::new()),
             dev_mode: false,
+            cache_size: 1024,
+            max_contract_size: None,
         }
     }
 
@@ -83,6 +91,21 @@ impl PoaNode {
     /// Set the signer manager for block production
     pub fn with_signer_manager(mut self, signer_manager: Arc<SignerManager>) -> Self {
         self.signer_manager = signer_manager;
+        self
+    }
+
+    /// Set the hot state cache size (Phase 5.31).
+    pub fn with_cache_size(mut self, cache_size: usize) -> Self {
+        self.cache_size = cache_size;
+        self
+    }
+
+    /// Override the maximum deployed contract code size (Phase 2.11).
+    ///
+    /// `0` → no override (use Ethereum's 24,576-byte default).
+    /// Any other value → enforce that limit via revm's `limit_contract_code_size`.
+    pub fn with_max_contract_size(mut self, size: usize) -> Self {
+        self.max_contract_size = if size == 0 { None } else { Some(size) };
         self
     }
 }
@@ -106,7 +129,7 @@ where
         EthereumPoolBuilder,
         BasicPayloadServiceBuilder<PoaPayloadBuilderBuilder>,
         EthereumNetworkBuilder,
-        EthereumExecutorBuilder,
+        PoaExecutorBuilder,
         PoaConsensusBuilder,
     >;
 
@@ -123,13 +146,14 @@ where
         ComponentsBuilder::default()
             .node_types::<N>()
             .pool(EthereumPoolBuilder::default())
-            .executor(EthereumExecutorBuilder::default())
+            .executor(PoaExecutorBuilder::new(self.max_contract_size))
             .payload(BasicPayloadServiceBuilder::new(
                 PoaPayloadBuilderBuilder::new(
                     self.chain_spec.clone(),
                     self.signer_manager.clone(),
                     self.dev_mode,
-                ),
+                )
+                .with_cache_size(self.cache_size),
             ))
             .network(EthereumNetworkBuilder::default())
             .consensus(
@@ -218,8 +242,8 @@ mod tests {
 
     #[test]
     fn test_strip_extra_data_v1() {
+        use alloy_primitives::{Address, Bloom, Bytes, B256, U256};
         use alloy_rpc_types_engine::{ExecutionPayload, ExecutionPayloadV1};
-        use alloy_primitives::{Bytes, B256, U256, Address, Bloom};
 
         let v1 = ExecutionPayloadV1 {
             parent_hash: B256::ZERO,
@@ -250,6 +274,6 @@ mod tests {
     #[test]
     fn test_poa_engine_validator_builder_is_default() {
         let _builder = PoaEngineValidatorBuilder;
-        let _default = PoaEngineValidatorBuilder::default();
+        let _default = PoaEngineValidatorBuilder;
     }
 }

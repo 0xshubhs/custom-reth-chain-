@@ -67,7 +67,9 @@ mod tests {
 
     impl MockStorage {
         fn new() -> Self {
-            Self { storage: BTreeMap::new() }
+            Self {
+                storage: BTreeMap::new(),
+            }
         }
 
         fn set(&mut self, address: Address, slot: U256, value: B256) {
@@ -124,10 +126,21 @@ mod tests {
         let get_signers = selectors::get_signers();
         let signer_count = selectors::signer_count();
 
-        let all = vec![gas_limit, block_time, max_contract_size, governance, get_signers, signer_count];
+        let all = [
+            gas_limit,
+            block_time,
+            max_contract_size,
+            governance,
+            get_signers,
+            signer_count,
+        ];
         for i in 0..all.len() {
             for j in (i + 1)..all.len() {
-                assert_ne!(all[i], all[j], "Selectors at index {} and {} should differ", i, j);
+                assert_ne!(
+                    all[i], all[j],
+                    "Selectors at index {} and {} should differ",
+                    i, j
+                );
             }
         }
     }
@@ -153,7 +166,15 @@ mod tests {
 
     #[test]
     fn test_encode_decode_u64_roundtrip() {
-        let values = [0u64, 1, 30_000_000, 60_000_000, 100_000_000, 1_000_000_000, u64::MAX];
+        let values = [
+            0u64,
+            1,
+            30_000_000,
+            60_000_000,
+            100_000_000,
+            1_000_000_000,
+            u64::MAX,
+        ];
         for val in values {
             let encoded = encode_u64(val);
             let decoded = decode_u64(encoded);
@@ -207,7 +228,10 @@ mod tests {
         hasher.update(B256::from(U256::from(1u64).to_be_bytes()).as_slice());
         let genesis_base = U256::from_be_bytes(hasher.finalize().0);
 
-        assert_eq!(our_base, genesis_base, "Array base slot must match genesis.rs computation");
+        assert_eq!(
+            our_base, genesis_base,
+            "Array base slot must match genesis.rs computation"
+        );
     }
 
     #[test]
@@ -236,11 +260,14 @@ mod tests {
         let mut hasher = Keccak256::new();
         let mut key_padded = [0u8; 32];
         key_padded[12..32].copy_from_slice(signer.as_slice());
-        hasher.update(&key_padded);
+        hasher.update(key_padded);
         hasher.update(B256::from(U256::from(2u64).to_be_bytes()).as_slice());
         let genesis_slot = hasher.finalize();
 
-        assert_eq!(our_slot, genesis_slot, "Mapping slot must match genesis.rs computation");
+        assert_eq!(
+            our_slot, genesis_slot,
+            "Mapping slot must match genesis.rs computation"
+        );
     }
 
     #[test]
@@ -266,13 +293,19 @@ mod tests {
         let mut mock = MockStorage::new();
         let value = encode_u64(42);
         mock.set(CHAIN_CONFIG_ADDRESS, U256::from(1), value);
-        assert_eq!(mock.read_storage(CHAIN_CONFIG_ADDRESS, U256::from(1)), Some(value));
+        assert_eq!(
+            mock.read_storage(CHAIN_CONFIG_ADDRESS, U256::from(1)),
+            Some(value)
+        );
     }
 
     #[test]
     fn test_mock_storage_missing_returns_none() {
         let mock = MockStorage::new();
-        assert_eq!(mock.read_storage(CHAIN_CONFIG_ADDRESS, U256::from(999)), None);
+        assert_eq!(
+            mock.read_storage(CHAIN_CONFIG_ADDRESS, U256::from(999)),
+            None
+        );
     }
 
     #[test]
@@ -280,12 +313,36 @@ mod tests {
         let mut mock = MockStorage::new();
         let gov = GOVERNANCE_SAFE_ADDRESS;
 
-        mock.set(CHAIN_CONFIG_ADDRESS, chain_config_slots::GOVERNANCE, encode_address(gov));
-        mock.set(CHAIN_CONFIG_ADDRESS, chain_config_slots::GAS_LIMIT, encode_u64(300_000_000));
-        mock.set(CHAIN_CONFIG_ADDRESS, chain_config_slots::BLOCK_TIME, encode_u64(1));
-        mock.set(CHAIN_CONFIG_ADDRESS, chain_config_slots::MAX_CONTRACT_SIZE, encode_u64(524_288));
-        mock.set(CHAIN_CONFIG_ADDRESS, chain_config_slots::CALLDATA_GAS_PER_BYTE, encode_u64(4));
-        mock.set(CHAIN_CONFIG_ADDRESS, chain_config_slots::MAX_TX_GAS, encode_u64(300_000_000));
+        mock.set(
+            CHAIN_CONFIG_ADDRESS,
+            chain_config_slots::GOVERNANCE,
+            encode_address(gov),
+        );
+        mock.set(
+            CHAIN_CONFIG_ADDRESS,
+            chain_config_slots::GAS_LIMIT,
+            encode_u64(300_000_000),
+        );
+        mock.set(
+            CHAIN_CONFIG_ADDRESS,
+            chain_config_slots::BLOCK_TIME,
+            encode_u64(1),
+        );
+        mock.set(
+            CHAIN_CONFIG_ADDRESS,
+            chain_config_slots::MAX_CONTRACT_SIZE,
+            encode_u64(524_288),
+        );
+        mock.set(
+            CHAIN_CONFIG_ADDRESS,
+            chain_config_slots::CALLDATA_GAS_PER_BYTE,
+            encode_u64(4),
+        );
+        mock.set(
+            CHAIN_CONFIG_ADDRESS,
+            chain_config_slots::MAX_TX_GAS,
+            encode_u64(300_000_000),
+        );
 
         let config = read_chain_config(&mock).unwrap();
         assert_eq!(config.governance, gov);
@@ -306,14 +363,22 @@ mod tests {
     #[test]
     fn test_read_gas_limit_from_mock() {
         let mut mock = MockStorage::new();
-        mock.set(CHAIN_CONFIG_ADDRESS, chain_config_slots::GAS_LIMIT, encode_u64(1_000_000_000));
+        mock.set(
+            CHAIN_CONFIG_ADDRESS,
+            chain_config_slots::GAS_LIMIT,
+            encode_u64(1_000_000_000),
+        );
         assert_eq!(read_gas_limit(&mock), Some(1_000_000_000));
     }
 
     #[test]
     fn test_read_block_time_from_mock() {
         let mut mock = MockStorage::new();
-        mock.set(CHAIN_CONFIG_ADDRESS, chain_config_slots::BLOCK_TIME, encode_u64(12));
+        mock.set(
+            CHAIN_CONFIG_ADDRESS,
+            chain_config_slots::BLOCK_TIME,
+            encode_u64(12),
+        );
         assert_eq!(read_block_time(&mock), Some(12));
     }
 
@@ -323,13 +388,29 @@ mod tests {
         let gov = GOVERNANCE_SAFE_ADDRESS;
         let signers = dev_signers();
 
-        mock.set(SIGNER_REGISTRY_ADDRESS, signer_registry_slots::GOVERNANCE, encode_address(gov));
-        mock.set(SIGNER_REGISTRY_ADDRESS, signer_registry_slots::SIGNERS_LENGTH, encode_u64(3));
-        mock.set(SIGNER_REGISTRY_ADDRESS, signer_registry_slots::SIGNER_THRESHOLD, encode_u64(2));
+        mock.set(
+            SIGNER_REGISTRY_ADDRESS,
+            signer_registry_slots::GOVERNANCE,
+            encode_address(gov),
+        );
+        mock.set(
+            SIGNER_REGISTRY_ADDRESS,
+            signer_registry_slots::SIGNERS_LENGTH,
+            encode_u64(3),
+        );
+        mock.set(
+            SIGNER_REGISTRY_ADDRESS,
+            signer_registry_slots::SIGNER_THRESHOLD,
+            encode_u64(2),
+        );
 
         let base = dynamic_array_base_slot(signer_registry_slots::SIGNERS_LENGTH);
         for (i, signer) in signers.iter().enumerate() {
-            mock.set(SIGNER_REGISTRY_ADDRESS, base + U256::from(i), encode_address(*signer));
+            mock.set(
+                SIGNER_REGISTRY_ADDRESS,
+                base + U256::from(i),
+                encode_address(*signer),
+            );
         }
 
         let list = read_signer_list(&mock).unwrap();
@@ -342,9 +423,21 @@ mod tests {
     #[test]
     fn test_read_signer_list_empty() {
         let mut mock = MockStorage::new();
-        mock.set(SIGNER_REGISTRY_ADDRESS, signer_registry_slots::GOVERNANCE, encode_address(GOVERNANCE_SAFE_ADDRESS));
-        mock.set(SIGNER_REGISTRY_ADDRESS, signer_registry_slots::SIGNERS_LENGTH, encode_u64(0));
-        mock.set(SIGNER_REGISTRY_ADDRESS, signer_registry_slots::SIGNER_THRESHOLD, encode_u64(0));
+        mock.set(
+            SIGNER_REGISTRY_ADDRESS,
+            signer_registry_slots::GOVERNANCE,
+            encode_address(GOVERNANCE_SAFE_ADDRESS),
+        );
+        mock.set(
+            SIGNER_REGISTRY_ADDRESS,
+            signer_registry_slots::SIGNERS_LENGTH,
+            encode_u64(0),
+        );
+        mock.set(
+            SIGNER_REGISTRY_ADDRESS,
+            signer_registry_slots::SIGNER_THRESHOLD,
+            encode_u64(0),
+        );
 
         let list = read_signer_list(&mock).unwrap();
         assert!(list.signers.is_empty());
@@ -375,11 +468,11 @@ mod tests {
         let config = read_chain_config(&reader).unwrap();
 
         assert_eq!(config.governance, GOVERNANCE_SAFE_ADDRESS);
-        assert_eq!(config.gas_limit, 30_000_000);
-        assert_eq!(config.block_time, 2);
+        assert_eq!(config.gas_limit, 300_000_000); // Phase 2: 300M dev gas limit
+        assert_eq!(config.block_time, 1); // Phase 2: 1-second blocks
         assert_eq!(config.max_contract_size, 24_576);
         assert_eq!(config.calldata_gas_per_byte, 16);
-        assert_eq!(config.max_tx_gas, 30_000_000);
+        assert_eq!(config.max_tx_gas, 300_000_000); // matches gas_limit
         assert!(!config.eager_mining);
     }
 
@@ -391,11 +484,11 @@ mod tests {
         let config = read_chain_config(&reader).unwrap();
 
         assert_eq!(config.governance, GOVERNANCE_SAFE_ADDRESS);
-        assert_eq!(config.gas_limit, 60_000_000);
-        assert_eq!(config.block_time, 12);
+        assert_eq!(config.gas_limit, 1_000_000_000); // Phase 2: 1B production gas limit
+        assert_eq!(config.block_time, 2); // Production: 2-second blocks
         assert_eq!(config.max_contract_size, 24_576);
         assert_eq!(config.calldata_gas_per_byte, 16);
-        assert_eq!(config.max_tx_gas, 60_000_000);
+        assert_eq!(config.max_tx_gas, 1_000_000_000); // matches gas_limit
     }
 
     #[test]
@@ -420,7 +513,10 @@ mod tests {
 
         assert_eq!(list.governance, GOVERNANCE_SAFE_ADDRESS);
         assert_eq!(list.signers.len(), 5);
-        assert_eq!(list.signers, dev_accounts().into_iter().take(5).collect::<Vec<_>>());
+        assert_eq!(
+            list.signers,
+            dev_accounts().into_iter().take(5).collect::<Vec<_>>()
+        );
         assert_eq!(list.threshold, 3);
     }
 
@@ -428,14 +524,14 @@ mod tests {
     fn test_genesis_reader_gas_limit_shortcut() {
         let genesis = create_dev_genesis();
         let reader = GenesisStorageReader::from_genesis(&genesis);
-        assert_eq!(read_gas_limit(&reader), Some(30_000_000));
+        assert_eq!(read_gas_limit(&reader), Some(300_000_000)); // Phase 2: 300M default
     }
 
     #[test]
     fn test_genesis_reader_block_time_shortcut() {
         let genesis = create_dev_genesis();
         let reader = GenesisStorageReader::from_genesis(&genesis);
-        assert_eq!(read_block_time(&reader), Some(2));
+        assert_eq!(read_block_time(&reader), Some(1));
     }
 
     #[test]
@@ -617,7 +713,9 @@ mod tests {
         let genesis = create_dev_genesis();
         let reader = GenesisStorageReader::from_genesis(&genesis);
 
-        let fake_addr: Address = "0x0000000000000000000000000000000000000099".parse().unwrap();
+        let fake_addr: Address = "0x0000000000000000000000000000000000000099"
+            .parse()
+            .unwrap();
         assert_eq!(reader.read_storage(fake_addr, U256::ZERO), None);
     }
 
@@ -625,7 +723,10 @@ mod tests {
     fn test_genesis_reader_nonexistent_slot() {
         let genesis = create_dev_genesis();
         let reader = GenesisStorageReader::from_genesis(&genesis);
-        assert_eq!(reader.read_storage(CHAIN_CONFIG_ADDRESS, U256::from(999)), None);
+        assert_eq!(
+            reader.read_storage(CHAIN_CONFIG_ADDRESS, U256::from(999)),
+            None
+        );
     }
 
     // =========================================================================
@@ -681,7 +782,7 @@ mod tests {
     fn test_simulate_gas_limit_change() {
         let genesis = create_dev_genesis();
         let reader = GenesisStorageReader::from_genesis(&genesis);
-        assert_eq!(read_gas_limit(&reader), Some(30_000_000));
+        assert_eq!(read_gas_limit(&reader), Some(300_000_000)); // Phase 2: 300M default
 
         let mut mock = MockStorage::new();
         let chain_config_account = genesis.alloc.get(&CHAIN_CONFIG_ADDRESS).unwrap();
@@ -691,11 +792,15 @@ mod tests {
                 mock.set(CHAIN_CONFIG_ADDRESS, slot, *value);
             }
         }
-        mock.set(CHAIN_CONFIG_ADDRESS, chain_config_slots::GAS_LIMIT, encode_u64(300_000_000));
+        mock.set(
+            CHAIN_CONFIG_ADDRESS,
+            chain_config_slots::GAS_LIMIT,
+            encode_u64(1_000_000_000),
+        );
 
         let config = read_chain_config(&mock).unwrap();
-        assert_eq!(config.gas_limit, 300_000_000);
-        assert_eq!(config.block_time, 2);
+        assert_eq!(config.gas_limit, 1_000_000_000);
+        assert_eq!(config.block_time, 1); // Phase 2: 1s default
         assert_eq!(config.governance, GOVERNANCE_SAFE_ADDRESS);
     }
 
@@ -718,12 +823,21 @@ mod tests {
             }
         }
 
-        mock.set(SIGNER_REGISTRY_ADDRESS, signer_registry_slots::SIGNERS_LENGTH, encode_u64(4));
+        mock.set(
+            SIGNER_REGISTRY_ADDRESS,
+            signer_registry_slots::SIGNERS_LENGTH,
+            encode_u64(4),
+        );
 
         let base = dynamic_array_base_slot(signer_registry_slots::SIGNERS_LENGTH);
-        mock.set(SIGNER_REGISTRY_ADDRESS, base + U256::from(3), encode_address(new_signer));
+        mock.set(
+            SIGNER_REGISTRY_ADDRESS,
+            base + U256::from(3),
+            encode_address(new_signer),
+        );
 
-        let is_signer_slot = mapping_address_bool_slot(new_signer, signer_registry_slots::IS_SIGNER_MAPPING);
+        let is_signer_slot =
+            mapping_address_bool_slot(new_signer, signer_registry_slots::IS_SIGNER_MAPPING);
         mock.set(
             SIGNER_REGISTRY_ADDRESS,
             U256::from_be_bytes(is_signer_slot.0),
@@ -740,7 +854,7 @@ mod tests {
     fn test_simulate_block_time_change_to_1_second() {
         let genesis = create_dev_genesis();
         let reader = GenesisStorageReader::from_genesis(&genesis);
-        assert_eq!(read_block_time(&reader), Some(2));
+        assert_eq!(read_block_time(&reader), Some(1)); // Phase 2: 1s default
 
         let mut mock = MockStorage::new();
         let chain_config_account = genesis.alloc.get(&CHAIN_CONFIG_ADDRESS).unwrap();
@@ -750,10 +864,14 @@ mod tests {
                 mock.set(CHAIN_CONFIG_ADDRESS, slot, *value);
             }
         }
-        mock.set(CHAIN_CONFIG_ADDRESS, chain_config_slots::BLOCK_TIME, encode_u64(1));
+        mock.set(
+            CHAIN_CONFIG_ADDRESS,
+            chain_config_slots::BLOCK_TIME,
+            encode_u64(2),
+        );
 
-        assert_eq!(read_block_time(&mock), Some(1));
-        assert_eq!(read_gas_limit(&mock), Some(30_000_000));
+        assert_eq!(read_block_time(&mock), Some(2));
+        assert_eq!(read_gas_limit(&mock), Some(300_000_000)); // Phase 2: 300M default
     }
 
     // =========================================================================
@@ -794,7 +912,11 @@ mod tests {
         let genesis = create_dev_genesis();
         let reader = GenesisStorageReader::from_genesis(&genesis);
         let delay = read_timelock_delay(&reader);
-        assert_eq!(delay, Some(86400), "Timelock minDelay should be 86400 (24h)");
+        assert_eq!(
+            delay,
+            Some(86400),
+            "Timelock minDelay should be 86400 (24h)"
+        );
     }
 
     #[test]
@@ -815,7 +937,11 @@ mod tests {
     #[test]
     fn test_read_timelock_delay_from_mock() {
         let mut mock = MockStorage::new();
-        mock.set(TIMELOCK_ADDRESS, timelock_slots::MIN_DELAY, encode_u64(172800));
+        mock.set(
+            TIMELOCK_ADDRESS,
+            timelock_slots::MIN_DELAY,
+            encode_u64(172800),
+        );
         assert_eq!(read_timelock_delay(&mock), Some(172800));
     }
 
@@ -825,7 +951,10 @@ mod tests {
         let genesis = create_genesis(config);
         let reader = GenesisStorageReader::from_genesis(&genesis);
         assert_eq!(read_timelock_delay(&reader), Some(86400));
-        assert_eq!(read_timelock_proposer(&reader), Some(GOVERNANCE_SAFE_ADDRESS));
+        assert_eq!(
+            read_timelock_proposer(&reader),
+            Some(GOVERNANCE_SAFE_ADDRESS)
+        );
         assert!(!is_timelock_paused(&reader));
     }
 }

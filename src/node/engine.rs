@@ -1,10 +1,10 @@
 use alloy_rpc_types_engine::{ExecutionData, ExecutionPayload, PayloadError};
-use reth_ethereum::EthPrimitives;
+use reth_ethereum::node::api::{AddOnsContext, EngineTypes};
 use reth_ethereum::node::api::{EngineApiValidator, FullNodeComponents, PayloadValidator};
-use reth_ethereum::node::api::{EngineTypes, AddOnsContext};
 use reth_ethereum::node::builder::node::NodeTypes;
 use reth_ethereum::node::builder::rpc::PayloadValidatorBuilder;
 use reth_ethereum::node::EthereumEngineValidator;
+use reth_ethereum::EthPrimitives;
 use reth_ethereum_engine_primitives::EthPayloadAttributes;
 use reth_payload_primitives::{
     EngineApiMessageVersion, EngineObjectValidationError, NewPayloadError, PayloadOrAttributes,
@@ -47,7 +47,9 @@ pub struct PoaEngineValidator<ChainSpec = reth_chainspec::ChainSpec> {
 impl<ChainSpec> PoaEngineValidator<ChainSpec> {
     /// Creates a new validator with the given chain spec.
     pub const fn new(chain_spec: Arc<ChainSpec>) -> Self {
-        Self { inner: EthereumEngineValidator::new(chain_spec) }
+        Self {
+            inner: EthereumEngineValidator::new(chain_spec),
+        }
     }
 }
 
@@ -131,11 +133,11 @@ impl<Node, Types> PayloadValidatorBuilder<Node> for PoaEngineValidatorBuilder
 where
     Types: NodeTypes<
         ChainSpec: reth_chainspec::EthChainSpec
-            + reth_ethereum_forks::EthereumHardforks
-            + Clone
-            + 'static,
+                       + reth_ethereum_forks::EthereumHardforks
+                       + Clone
+                       + 'static,
         Payload: EngineTypes<ExecutionData = ExecutionData>
-            + PayloadTypes<PayloadAttributes = EthPayloadAttributes>,
+                     + PayloadTypes<PayloadAttributes = EthPayloadAttributes>,
         Primitives = EthPrimitives,
     >,
     Node: FullNodeComponents<Types = Types>,

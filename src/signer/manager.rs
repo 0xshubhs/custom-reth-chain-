@@ -16,7 +16,9 @@ pub struct SignerManager {
 impl SignerManager {
     /// Create a new signer manager
     pub fn new() -> Self {
-        Self { signers: RwLock::new(HashMap::new()) }
+        Self {
+            signers: RwLock::new(HashMap::new()),
+        }
     }
 
     /// Add a signer from a private key hex string
@@ -49,14 +51,11 @@ impl SignerManager {
     }
 
     /// Sign a message hash with the specified signer
-    pub async fn sign_hash(
-        &self,
-        address: &Address,
-        hash: B256,
-    ) -> Result<Signature, SignerError> {
+    pub async fn sign_hash(&self, address: &Address, hash: B256) -> Result<Signature, SignerError> {
         let signers = self.signers.read().await;
-        let signer =
-            signers.get(address).ok_or_else(|| SignerError::NoSignerForAddress(*address))?;
+        let signer = signers
+            .get(address)
+            .ok_or(SignerError::NoSignerForAddress(*address))?;
 
         signer
             .sign_hash(&hash)

@@ -71,7 +71,9 @@ pub(crate) fn governance_contract_alloc(
             GenesisAccount {
                 balance: U256::ZERO,
                 nonce: Some(1),
-                code: Some(Bytes::from_static(include_bytes!("../bytecodes/chain_config.bin"))),
+                code: Some(Bytes::from_static(include_bytes!(
+                    "../bytecodes/chain_config.bin"
+                ))),
                 storage: Some(storage),
                 private_key: None,
             },
@@ -117,7 +119,7 @@ pub(crate) fn governance_contract_alloc(
             let mut hasher = Keccak256::new();
             let mut key_padded = [0u8; 32];
             key_padded[12..32].copy_from_slice(signer.as_slice());
-            hasher.update(&key_padded);
+            hasher.update(key_padded);
             hasher.update(B256::from(U256::from(2u64).to_be_bytes()).as_slice());
             let mapping_slot = hasher.finalize();
             storage.insert(mapping_slot, B256::from(U256::from(1u64).to_be_bytes()));
@@ -135,7 +137,9 @@ pub(crate) fn governance_contract_alloc(
             GenesisAccount {
                 balance: U256::ZERO,
                 nonce: Some(1),
-                code: Some(Bytes::from_static(include_bytes!("../bytecodes/signer_registry.bin"))),
+                code: Some(Bytes::from_static(include_bytes!(
+                    "../bytecodes/signer_registry.bin"
+                ))),
                 storage: Some(storage),
                 private_key: None,
             },
@@ -208,7 +212,9 @@ pub(crate) fn governance_contract_alloc(
             GenesisAccount {
                 balance: U256::ZERO,
                 nonce: Some(1),
-                code: Some(Bytes::from_static(include_bytes!("../bytecodes/treasury.bin"))),
+                code: Some(Bytes::from_static(include_bytes!(
+                    "../bytecodes/treasury.bin"
+                ))),
                 storage: Some(storage),
                 private_key: None,
             },
@@ -227,10 +233,7 @@ pub(crate) fn governance_contract_alloc(
     {
         let mut storage = BTreeMap::new();
         // slot 0: minDelay = 86400 seconds (24 hours)
-        storage.insert(
-            B256::ZERO,
-            B256::from(U256::from(86400u64).to_be_bytes()),
-        );
+        storage.insert(B256::ZERO, B256::from(U256::from(86400u64).to_be_bytes()));
         // slot 1: proposer = governance
         let mut gov_slot = [0u8; 32];
         gov_slot[12..32].copy_from_slice(governance.as_slice());
@@ -255,7 +258,9 @@ pub(crate) fn governance_contract_alloc(
             GenesisAccount {
                 balance: U256::ZERO,
                 nonce: Some(1),
-                code: Some(Bytes::from_static(include_bytes!("../bytecodes/timelock.bin"))),
+                code: Some(Bytes::from_static(include_bytes!(
+                    "../bytecodes/timelock.bin"
+                ))),
                 storage: Some(storage),
                 private_key: None,
             },

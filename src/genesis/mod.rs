@@ -72,10 +72,10 @@ impl GenesisConfig {
 
         Self {
             chain_id: 9323310,
-            gas_limit: 30_000_000,
+            gas_limit: 300_000_000, // Phase 2: 300M gas limit (MegaETH-inspired, 10x Ethereum mainnet)
             prefunded_accounts: prefunded,
             signers,
-            block_period: 2, // Fast blocks for dev
+            block_period: 1, // Phase 2: 1-second blocks
             epoch: 30000,
             vanity: [0u8; 32],
         }
@@ -106,14 +106,11 @@ impl GenesisConfig {
         let signers = dev_accounts().into_iter().take(5).collect::<Vec<_>>();
 
         // Treasury: 2,500,000 ETH - ecosystem development fund
-        let treasury_balance =
-            U256::from(2_500_000u64) * U256::from(10u64).pow(U256::from(18u64));
+        let treasury_balance = U256::from(2_500_000u64) * U256::from(10u64).pow(U256::from(18u64));
         // Operations: 500,000 ETH - infrastructure and running costs
-        let operations_balance =
-            U256::from(500_000u64) * U256::from(10u64).pow(U256::from(18u64));
+        let operations_balance = U256::from(500_000u64) * U256::from(10u64).pow(U256::from(18u64));
         // Community: 100,000 ETH - faucet, airdrops, grants
-        let community_balance =
-            U256::from(100_000u64) * U256::from(10u64).pow(U256::from(18u64));
+        let community_balance = U256::from(100_000u64) * U256::from(10u64).pow(U256::from(18u64));
         // Signer gas: 10,000 ETH per signer - for block production gas costs
         let signer_balance = U256::from(10_000u64) * U256::from(10u64).pow(U256::from(18u64));
 
@@ -138,10 +135,10 @@ impl GenesisConfig {
 
         Self {
             chain_id: 9323310,
-            gas_limit: 60_000_000, // 60M - high throughput for POA
+            gas_limit: 1_000_000_000, // Phase 2: 1B gas (on-chain ChainConfig can lower it)
             prefunded_accounts: prefunded,
             signers,
-            block_period: 12, // Production block time
+            block_period: 2, // Production: 2s (faster than Ethereum's 12s)
             epoch: 30000,
             vanity,
         }
@@ -200,7 +197,13 @@ pub fn create_genesis(config: GenesisConfig) -> Genesis {
     for (address, balance) in config.prefunded_accounts {
         alloc.insert(
             address,
-            GenesisAccount { balance, nonce: None, code: None, storage: None, private_key: None },
+            GenesisAccount {
+                balance,
+                nonce: None,
+                code: None,
+                storage: None,
+                private_key: None,
+            },
         );
     }
 
@@ -312,8 +315,8 @@ mod tests {
         // Verify: 8 prefunded accounts (5 signers + treasury + ops + community) + 4 system contracts + 5 ERC-4337/infra + 1 miner proxy + 4 governance (incl. Timelock) + 4 Safe
         assert_eq!(genesis.alloc.len(), 26);
 
-        // Verify gas limit is 60M
-        assert_eq!(genesis.gas_limit, 60_000_000);
+        // Verify gas limit is 1B (Phase 2 default)
+        assert_eq!(genesis.gas_limit, 1_000_000_000);
 
         // Verify extra data has 5 signers: 32 + 5*20 + 65 = 197 bytes
         assert_eq!(genesis.extra_data.len(), 197);
@@ -337,7 +340,10 @@ mod tests {
         // chain_id bug fixed: create_genesis now uses config.chain_id
         assert_eq!(genesis.config.chain_id, 12345);
         assert!(genesis.alloc.contains_key(&funded));
-        assert_eq!(genesis.alloc.get(&funded).unwrap().balance, U256::from(1000));
+        assert_eq!(
+            genesis.alloc.get(&funded).unwrap().balance,
+            U256::from(1000)
+        );
     }
 
     #[test]
@@ -415,23 +421,31 @@ mod tests {
         let genesis = create_dev_genesis();
 
         // EIP-4788 Beacon Root
-        let contract = genesis.alloc.get(&address!("000F3df6D732807Ef1319fB7B8bB8522d0Beac02"));
+        let contract = genesis
+            .alloc
+            .get(&address!("000F3df6D732807Ef1319fB7B8bB8522d0Beac02"));
         assert!(contract.is_some());
         assert!(contract.unwrap().code.is_some());
         assert!(!contract.unwrap().code.as_ref().unwrap().is_empty());
 
         // EIP-2935 History Storage
-        let contract = genesis.alloc.get(&address!("0000F90827F1C53a10cb7A02335B175320002935"));
+        let contract = genesis
+            .alloc
+            .get(&address!("0000F90827F1C53a10cb7A02335B175320002935"));
         assert!(contract.is_some());
         assert!(contract.unwrap().code.is_some());
 
         // EIP-7002 Withdrawal Requests
-        let contract = genesis.alloc.get(&address!("00000961Ef480Eb55e80D19ad83579A64c007002"));
+        let contract = genesis
+            .alloc
+            .get(&address!("00000961Ef480Eb55e80D19ad83579A64c007002"));
         assert!(contract.is_some());
         assert!(contract.unwrap().code.is_some());
 
         // EIP-7251 Consolidation
-        let contract = genesis.alloc.get(&address!("0000BBdDc7CE488642fb579F8B00f3a590007251"));
+        let contract = genesis
+            .alloc
+            .get(&address!("0000BBdDc7CE488642fb579F8B00f3a590007251"));
         assert!(contract.is_some());
         assert!(contract.unwrap().code.is_some());
     }
@@ -488,8 +502,8 @@ mod tests {
         // Verify production chain ID
         assert_eq!(parsed["config"]["chainId"], 9323310);
 
-        // Verify gas limit is 60M
-        assert_eq!(genesis.gas_limit, 60_000_000);
+        // Verify gas limit is 1B (Phase 2 default)
+        assert_eq!(genesis.gas_limit, 1_000_000_000);
 
         // Verify all contracts present: 8 prefunded + 4 system + 5 infra + 1 miner proxy + 4 governance (incl. Timelock) + 4 safe = 26
         assert_eq!(genesis.alloc.len(), 26);
@@ -507,38 +521,90 @@ mod tests {
         let genesis = create_genesis(config);
 
         // All governance contracts must be present
-        assert!(genesis.alloc.contains_key(&CHAIN_CONFIG_ADDRESS), "Production must have ChainConfig");
-        assert!(genesis.alloc.contains_key(&SIGNER_REGISTRY_ADDRESS), "Production must have SignerRegistry");
-        assert!(genesis.alloc.contains_key(&TREASURY_ADDRESS), "Production must have Treasury");
-        assert!(genesis.alloc.contains_key(&TIMELOCK_ADDRESS), "Production must have Timelock");
+        assert!(
+            genesis.alloc.contains_key(&CHAIN_CONFIG_ADDRESS),
+            "Production must have ChainConfig"
+        );
+        assert!(
+            genesis.alloc.contains_key(&SIGNER_REGISTRY_ADDRESS),
+            "Production must have SignerRegistry"
+        );
+        assert!(
+            genesis.alloc.contains_key(&TREASURY_ADDRESS),
+            "Production must have Treasury"
+        );
+        assert!(
+            genesis.alloc.contains_key(&TIMELOCK_ADDRESS),
+            "Production must have Timelock"
+        );
 
         // Miner proxy must be present (coinbase target)
-        assert!(genesis.alloc.contains_key(&MINER_PROXY_ADDRESS), "Production must have Miner Proxy");
+        assert!(
+            genesis.alloc.contains_key(&MINER_PROXY_ADDRESS),
+            "Production must have Miner Proxy"
+        );
         assert_eq!(genesis.coinbase, MINER_PROXY_ADDRESS);
 
         // Safe contracts must be present
-        assert!(genesis.alloc.contains_key(&SAFE_SINGLETON_ADDRESS), "Production must have Safe Singleton");
-        assert!(genesis.alloc.contains_key(&SAFE_PROXY_FACTORY_ADDRESS), "Production must have Safe Proxy Factory");
-        assert!(genesis.alloc.contains_key(&SAFE_FALLBACK_HANDLER_ADDRESS), "Production must have Safe Fallback Handler");
-        assert!(genesis.alloc.contains_key(&SAFE_MULTISEND_ADDRESS), "Production must have Safe MultiSend");
+        assert!(
+            genesis.alloc.contains_key(&SAFE_SINGLETON_ADDRESS),
+            "Production must have Safe Singleton"
+        );
+        assert!(
+            genesis.alloc.contains_key(&SAFE_PROXY_FACTORY_ADDRESS),
+            "Production must have Safe Proxy Factory"
+        );
+        assert!(
+            genesis.alloc.contains_key(&SAFE_FALLBACK_HANDLER_ADDRESS),
+            "Production must have Safe Fallback Handler"
+        );
+        assert!(
+            genesis.alloc.contains_key(&SAFE_MULTISEND_ADDRESS),
+            "Production must have Safe MultiSend"
+        );
 
         // ERC-4337 infrastructure must be present
-        assert!(genesis.alloc.contains_key(&address!("0000000071727De22E5E9d8BAf0edAc6f37da032")), "Production must have EntryPoint");
-        assert!(genesis.alloc.contains_key(&address!("C02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2")), "Production must have WETH9");
-        assert!(genesis.alloc.contains_key(&address!("cA11bde05977b3631167028862bE2a173976CA11")), "Production must have Multicall3");
+        assert!(
+            genesis
+                .alloc
+                .contains_key(&address!("0000000071727De22E5E9d8BAf0edAc6f37da032")),
+            "Production must have EntryPoint"
+        );
+        assert!(
+            genesis
+                .alloc
+                .contains_key(&address!("C02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2")),
+            "Production must have WETH9"
+        );
+        assert!(
+            genesis
+                .alloc
+                .contains_key(&address!("cA11bde05977b3631167028862bE2a173976CA11")),
+            "Production must have Multicall3"
+        );
 
         // System contracts must be present
-        assert!(genesis.alloc.contains_key(&address!("000F3df6D732807Ef1319fB7B8bB8522d0Beac02")), "Production must have EIP-4788");
-        assert!(genesis.alloc.contains_key(&address!("0000F90827F1C53a10cb7A02335B175320002935")), "Production must have EIP-2935");
+        assert!(
+            genesis
+                .alloc
+                .contains_key(&address!("000F3df6D732807Ef1319fB7B8bB8522d0Beac02")),
+            "Production must have EIP-4788"
+        );
+        assert!(
+            genesis
+                .alloc
+                .contains_key(&address!("0000F90827F1C53a10cb7A02335B175320002935")),
+            "Production must have EIP-2935"
+        );
 
-        // ChainConfig should have 60M gas limit in storage
+        // ChainConfig should have 1B gas limit in storage (Phase 2 default)
         let chain_config = genesis.alloc.get(&CHAIN_CONFIG_ADDRESS).unwrap();
         let storage = chain_config.storage.as_ref().unwrap();
         let slot1 = b256!("0000000000000000000000000000000000000000000000000000000000000001");
         assert_eq!(
             *storage.get(&slot1).unwrap(),
-            B256::from(U256::from(60_000_000u64).to_be_bytes()),
-            "Production ChainConfig gas limit should be 60M"
+            B256::from(U256::from(1_000_000_000u64).to_be_bytes()),
+            "Production ChainConfig gas limit should be 1B"
         );
 
         // SignerRegistry should have 5 signers
@@ -564,11 +630,17 @@ mod tests {
         let proxy = proxy.unwrap();
         assert!(proxy.code.is_some(), "Miner proxy must have bytecode");
         assert_eq!(proxy.nonce, Some(1));
-        assert!(proxy.storage.is_some(), "Miner proxy must have storage (admin slot)");
+        assert!(
+            proxy.storage.is_some(),
+            "Miner proxy must have storage (admin slot)"
+        );
 
         // Admin should be first dev signer
         let storage = proxy.storage.as_ref().unwrap();
-        assert!(storage.contains_key(&EIP1967_ADMIN_SLOT), "Must have EIP-1967 admin slot");
+        assert!(
+            storage.contains_key(&EIP1967_ADMIN_SLOT),
+            "Must have EIP-1967 admin slot"
+        );
     }
 
     #[test]
@@ -580,7 +652,10 @@ mod tests {
             .alloc
             .get(&address!("0000000071727De22E5E9d8BAf0edAc6f37da032"));
         assert!(entrypoint.is_some(), "EntryPoint v0.7 must be in genesis");
-        assert!(entrypoint.unwrap().code.is_some(), "EntryPoint must have code");
+        assert!(
+            entrypoint.unwrap().code.is_some(),
+            "EntryPoint must have code"
+        );
         assert_eq!(entrypoint.unwrap().nonce, Some(1));
 
         // WETH9 at canonical mainnet address
@@ -589,9 +664,16 @@ mod tests {
             .get(&address!("C02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"));
         assert!(weth.is_some(), "WETH9 must be in genesis");
         assert!(weth.unwrap().code.is_some(), "WETH9 must have code");
-        assert!(weth.unwrap().storage.is_some(), "WETH9 must have initialized storage");
+        assert!(
+            weth.unwrap().storage.is_some(),
+            "WETH9 must have initialized storage"
+        );
         let weth_storage = weth.unwrap().storage.as_ref().unwrap();
-        assert_eq!(weth_storage.len(), 3, "WETH9 needs name, symbol, decimals slots");
+        assert_eq!(
+            weth_storage.len(),
+            3,
+            "WETH9 needs name, symbol, decimals slots"
+        );
 
         // Multicall3 at canonical address
         assert!(
@@ -628,21 +710,40 @@ mod tests {
         let chain_config = chain_config.unwrap();
         assert!(chain_config.code.is_some(), "ChainConfig must have code");
         assert_eq!(chain_config.nonce, Some(1));
-        assert!(chain_config.storage.is_some(), "ChainConfig must have storage");
+        assert!(
+            chain_config.storage.is_some(),
+            "ChainConfig must have storage"
+        );
         let storage = chain_config.storage.as_ref().unwrap();
         // Should have slots for governance, gasLimit, blockTime, maxContractSize, calldataGasPerByte, maxTxGas
-        assert!(storage.len() >= 6, "ChainConfig needs at least 6 storage slots");
+        assert!(
+            storage.len() >= 6,
+            "ChainConfig needs at least 6 storage slots"
+        );
 
         // SignerRegistry contract
         let signer_registry = genesis.alloc.get(&SIGNER_REGISTRY_ADDRESS);
-        assert!(signer_registry.is_some(), "SignerRegistry must be in genesis");
+        assert!(
+            signer_registry.is_some(),
+            "SignerRegistry must be in genesis"
+        );
         let signer_registry = signer_registry.unwrap();
-        assert!(signer_registry.code.is_some(), "SignerRegistry must have code");
+        assert!(
+            signer_registry.code.is_some(),
+            "SignerRegistry must have code"
+        );
         assert_eq!(signer_registry.nonce, Some(1));
-        assert!(signer_registry.storage.is_some(), "SignerRegistry must have storage");
+        assert!(
+            signer_registry.storage.is_some(),
+            "SignerRegistry must have storage"
+        );
         let storage = signer_registry.storage.as_ref().unwrap();
         // governance + signers.length + 3 signer array entries + 3 isSigner mapping entries + threshold
-        assert!(storage.len() >= 8, "SignerRegistry needs at least 8 storage slots (got {})", storage.len());
+        assert!(
+            storage.len() >= 8,
+            "SignerRegistry needs at least 8 storage slots (got {})",
+            storage.len()
+        );
 
         // Treasury contract
         let treasury = genesis.alloc.get(&TREASURY_ADDRESS);
@@ -663,23 +764,38 @@ mod tests {
         // Safe Singleton
         let singleton = genesis.alloc.get(&SAFE_SINGLETON_ADDRESS);
         assert!(singleton.is_some(), "Safe Singleton must be in genesis");
-        assert!(singleton.unwrap().code.is_some(), "Safe Singleton must have code");
+        assert!(
+            singleton.unwrap().code.is_some(),
+            "Safe Singleton must have code"
+        );
         assert_eq!(singleton.unwrap().nonce, Some(1));
 
         // Safe Proxy Factory
         let factory = genesis.alloc.get(&SAFE_PROXY_FACTORY_ADDRESS);
         assert!(factory.is_some(), "Safe Proxy Factory must be in genesis");
-        assert!(factory.unwrap().code.is_some(), "Safe Proxy Factory must have code");
+        assert!(
+            factory.unwrap().code.is_some(),
+            "Safe Proxy Factory must have code"
+        );
 
         // Safe Fallback Handler
         let handler = genesis.alloc.get(&SAFE_FALLBACK_HANDLER_ADDRESS);
-        assert!(handler.is_some(), "Safe Fallback Handler must be in genesis");
-        assert!(handler.unwrap().code.is_some(), "Safe Fallback Handler must have code");
+        assert!(
+            handler.is_some(),
+            "Safe Fallback Handler must be in genesis"
+        );
+        assert!(
+            handler.unwrap().code.is_some(),
+            "Safe Fallback Handler must have code"
+        );
 
         // Safe MultiSend
         let multisend = genesis.alloc.get(&SAFE_MULTISEND_ADDRESS);
         assert!(multisend.is_some(), "Safe MultiSend must be in genesis");
-        assert!(multisend.unwrap().code.is_some(), "Safe MultiSend must have code");
+        assert!(
+            multisend.unwrap().code.is_some(),
+            "Safe MultiSend must have code"
+        );
     }
 
     #[test]
@@ -692,7 +808,11 @@ mod tests {
         let admin_slot = storage.get(&EIP1967_ADMIN_SLOT).unwrap();
         let mut expected = [0u8; 32];
         expected[12..32].copy_from_slice(GOVERNANCE_SAFE_ADDRESS.as_slice());
-        assert_eq!(*admin_slot, B256::from(expected), "Miner proxy admin should be governance Safe");
+        assert_eq!(
+            *admin_slot,
+            B256::from(expected),
+            "Miner proxy admin should be governance Safe"
+        );
     }
 
     // =========================================================================
@@ -716,20 +836,20 @@ mod tests {
             "ChainConfig slot 0 should be governance Safe address"
         );
 
-        // slot 1: gasLimit = 30_000_000
+        // slot 1: gasLimit = 300_000_000 (Phase 2: 300M for dev genesis)
         let slot1 = b256!("0000000000000000000000000000000000000000000000000000000000000001");
         assert_eq!(
             *storage.get(&slot1).unwrap(),
-            B256::from(U256::from(30_000_000u64).to_be_bytes()),
-            "ChainConfig slot 1 should be gas limit 30M"
+            B256::from(U256::from(300_000_000u64).to_be_bytes()),
+            "ChainConfig slot 1 should be gas limit 300M"
         );
 
-        // slot 2: blockTime = 2
+        // slot 2: blockTime = 1 (Phase 2: 1-second blocks for dev genesis)
         let slot2 = b256!("0000000000000000000000000000000000000000000000000000000000000002");
         assert_eq!(
             *storage.get(&slot2).unwrap(),
-            B256::from(U256::from(2u64).to_be_bytes()),
-            "ChainConfig slot 2 should be block time 2"
+            B256::from(U256::from(1u64).to_be_bytes()),
+            "ChainConfig slot 2 should be block time 1s"
         );
 
         // --- SignerRegistry storage verification ---
@@ -801,9 +921,14 @@ mod tests {
 
         for account in &accounts {
             let alloc = genesis.alloc.get(account);
-            assert!(alloc.is_some(), "Dev account {} should be in genesis", account);
+            assert!(
+                alloc.is_some(),
+                "Dev account {} should be in genesis",
+                account
+            );
             assert_eq!(
-                alloc.unwrap().balance, expected_balance,
+                alloc.unwrap().balance,
+                expected_balance,
                 "Dev account {} should have 10,000 ETH",
                 account
             );
@@ -821,20 +946,33 @@ mod tests {
         let signer_balance = U256::from(10_000u64) * eth;
         for account in dev_accounts().iter().take(5) {
             let alloc = genesis.alloc.get(account).unwrap();
-            assert_eq!(alloc.balance, signer_balance, "Signer {} should have 10,000 ETH", account);
+            assert_eq!(
+                alloc.balance, signer_balance,
+                "Signer {} should have 10,000 ETH",
+                account
+            );
         }
 
         // Account 5 (treasury): 2,500,000 ETH
         let treasury_balance = U256::from(2_500_000u64) * eth;
-        assert_eq!(genesis.alloc.get(&dev_accounts()[5]).unwrap().balance, treasury_balance);
+        assert_eq!(
+            genesis.alloc.get(&dev_accounts()[5]).unwrap().balance,
+            treasury_balance
+        );
 
         // Account 6 (operations): 500,000 ETH
         let operations_balance = U256::from(500_000u64) * eth;
-        assert_eq!(genesis.alloc.get(&dev_accounts()[6]).unwrap().balance, operations_balance);
+        assert_eq!(
+            genesis.alloc.get(&dev_accounts()[6]).unwrap().balance,
+            operations_balance
+        );
 
         // Account 7 (community): 100,000 ETH
         let community_balance = U256::from(100_000u64) * eth;
-        assert_eq!(genesis.alloc.get(&dev_accounts()[7]).unwrap().balance, community_balance);
+        assert_eq!(
+            genesis.alloc.get(&dev_accounts()[7]).unwrap().balance,
+            community_balance
+        );
     }
 
     #[test]
@@ -849,7 +987,8 @@ mod tests {
         let governance = 4; // ChainConfig, SignerRegistry, Treasury, Timelock
         let safe = 4; // Singleton, ProxyFactory, FallbackHandler, MultiSend
 
-        let expected = dev_count + system_contracts + infra_contracts + miner_proxy + governance + safe;
+        let expected =
+            dev_count + system_contracts + infra_contracts + miner_proxy + governance + safe;
         assert_eq!(expected, 38);
         assert_eq!(genesis.alloc.len(), expected);
     }

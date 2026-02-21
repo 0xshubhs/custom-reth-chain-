@@ -1,12 +1,12 @@
 use crate::chainspec::PoaChainSpec;
 use crate::consensus::PoaConsensus;
 use crate::output;
-use reth_ethereum::EthPrimitives;
 use reth_ethereum::node::builder::{
     components::ConsensusBuilder,
     node::{FullNodeTypes, NodeTypes},
     BuilderContext,
 };
+use reth_ethereum::EthPrimitives;
 use std::sync::Arc;
 
 /// Custom consensus builder that provides `PoaConsensus` instead of `EthBeaconConsensus`.
@@ -25,7 +25,10 @@ pub struct PoaConsensusBuilder {
 impl PoaConsensusBuilder {
     /// Create a new consensus builder with the given POA chain spec.
     pub fn new(chain_spec: Arc<PoaChainSpec>) -> Self {
-        Self { chain_spec, dev_mode: false }
+        Self {
+            chain_spec,
+            dev_mode: false,
+        }
     }
 
     /// Set dev mode on the consensus builder
@@ -42,7 +45,11 @@ where
     type Consensus = Arc<PoaConsensus>;
 
     async fn build_consensus(self, _ctx: &BuilderContext<N>) -> eyre::Result<Self::Consensus> {
-        let mode = if self.dev_mode { "dev (relaxed)" } else { "production (strict)" };
+        let mode = if self.dev_mode {
+            "dev (relaxed)"
+        } else {
+            "production (strict)"
+        };
         output::print_consensus_init(
             self.chain_spec.signers().len(),
             self.chain_spec.epoch(),

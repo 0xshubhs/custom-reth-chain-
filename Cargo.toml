@@ -23,10 +23,14 @@ reth-db = { git = "https://github.com/paradigmxyz/reth", branch = "main" }
 reth-ethereum-payload-builder = { git = "https://github.com/paradigmxyz/reth", branch = "main" }
 reth-basic-payload-builder = { git = "https://github.com/paradigmxyz/reth", branch = "main" }
 reth-evm = { git = "https://github.com/paradigmxyz/reth", branch = "main" }
+reth-evm-ethereum = { git = "https://github.com/paradigmxyz/reth", branch = "main" }
 reth-transaction-pool = { git = "https://github.com/paradigmxyz/reth", branch = "main" }
 reth-ethereum-engine-primitives = { git = "https://github.com/paradigmxyz/reth", branch = "main" }
 reth-payload-builder-primitives = { git = "https://github.com/paradigmxyz/reth", branch = "main" }
 reth-storage-api = { git = "https://github.com/paradigmxyz/reth", branch = "main" }
+
+# EVM factory customization (Phase 2: contract size override)
+alloy-evm = "0.27"
 
 # RPC dependencies
 jsonrpsee = { version = "0.26", features = ["server", "macros"] }

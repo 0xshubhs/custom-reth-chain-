@@ -16,7 +16,10 @@ pub fn print_banner(chain_id: u64, block_period: u64) {
     println!();
     println!("{}", "=== Meowchain POA Node ===".blue().bold());
     println!("  Chain ID:     {}", chain_id.to_string().cyan());
-    println!("  Block period: {} seconds", block_period.to_string().cyan());
+    println!(
+        "  Block period: {} seconds",
+        block_period.to_string().cyan()
+    );
 }
 
 /// Print the operating mode.
@@ -33,7 +36,11 @@ pub fn print_signers(signers: &[Address]) {
         signers.len().to_string().cyan()
     );
     for (i, signer) in signers.iter().enumerate() {
-        println!("    {}. {}", (i + 1).to_string().dimmed(), format!("{signer}").cyan());
+        println!(
+            "    {}. {}",
+            (i + 1).to_string().dimmed(),
+            format!("{signer}").cyan()
+        );
     }
 }
 
@@ -70,6 +77,7 @@ pub fn print_no_signer_warning() {
 // ── Node Configuration ─────────────────────────────────────────────
 
 /// Print the node configuration block.
+#[allow(clippy::too_many_arguments)]
 pub fn print_config(
     is_dev_mode: bool,
     mining_mode: &str,
@@ -84,14 +92,44 @@ pub fn print_config(
 ) {
     println!();
     println!("{}", "Node configuration:".blue().bold());
-    println!("  {} {}", "Dev mode:   ".dimmed(), if is_dev_mode { "true".green() } else { "false".normal() });
+    println!(
+        "  {} {}",
+        "Dev mode:   ".dimmed(),
+        if is_dev_mode {
+            "true".green()
+        } else {
+            "false".normal()
+        }
+    );
     println!("  {} {}", "Mining mode:".dimmed(), mining_mode.cyan());
-    println!("  {} {}", "Gas limit:  ".dimmed(), gas_limit.to_string().cyan());
-    println!("  {} {}:{}", "HTTP RPC:   ".dimmed(), http_addr.cyan(), http_port.to_string().cyan());
-    println!("  {} {}:{}", "WS RPC:     ".dimmed(), ws_addr.cyan(), ws_port.to_string().cyan());
-    println!("  {} {}", "P2P port:   ".dimmed(), p2p_port.to_string().cyan());
+    println!(
+        "  {} {}",
+        "Gas limit:  ".dimmed(),
+        gas_limit.to_string().cyan()
+    );
+    println!(
+        "  {} {}:{}",
+        "HTTP RPC:   ".dimmed(),
+        http_addr.cyan(),
+        http_port.to_string().cyan()
+    );
+    println!(
+        "  {} {}:{}",
+        "WS RPC:     ".dimmed(),
+        ws_addr.cyan(),
+        ws_port.to_string().cyan()
+    );
+    println!(
+        "  {} {}",
+        "P2P port:   ".dimmed(),
+        p2p_port.to_string().cyan()
+    );
     if let Some(count) = bootnode_count {
-        println!("  {} {} configured", "Bootnodes:  ".dimmed(), count.to_string().cyan());
+        println!(
+            "  {} {} configured",
+            "Bootnodes:  ".dimmed(),
+            count.to_string().cyan()
+        );
     }
     println!("  {} {:?}", "Data dir:   ".dimmed(), datadir);
 }
@@ -121,14 +159,21 @@ pub fn print_prefunded(accounts: &[Address]) {
     println!();
     println!("{}", "Prefunded accounts:".blue().bold());
     for (i, account) in accounts.iter().enumerate() {
-        println!("  {}. {}", (i + 1).to_string().dimmed(), format!("{account}").cyan());
+        println!(
+            "  {}. {}",
+            (i + 1).to_string().dimmed(),
+            format!("{account}").cyan()
+        );
     }
 }
 
 /// Print chain data storage info and block period.
 pub fn print_chain_data(datadir: &Path, block_period: u64) {
     println!();
-    println!("  Chain data stored in: {}", datadir.display().to_string().dimmed());
+    println!(
+        "  Chain data stored in: {}",
+        datadir.display().to_string().dimmed()
+    );
     println!(
         "  Blocks produced every {} seconds (POA interval mining)",
         block_period.to_string().cyan()
@@ -138,15 +183,15 @@ pub fn print_chain_data(datadir: &Path, block_period: u64) {
 /// Print the final "running" message with RPC URLs.
 pub fn print_running(http_addr: &str, http_port: u16, ws_addr: &str, ws_port: u16) {
     println!();
-    println!("{}", "POA node running. Press Ctrl+C to stop.".green().bold());
+    println!(
+        "{}",
+        "POA node running. Press Ctrl+C to stop.".green().bold()
+    );
     println!(
         "  HTTP RPC: {}",
         format!("http://{http_addr}:{http_port}").cyan()
     );
-    println!(
-        "  WS RPC:   {}",
-        format!("ws://{ws_addr}:{ws_port}").cyan()
-    );
+    println!("  WS RPC:   {}", format!("ws://{ws_addr}:{ws_port}").cyan());
 }
 
 // ── Consensus ──────────────────────────────────────────────────────
@@ -197,14 +242,21 @@ pub fn print_epoch_refresh(block_number: u64, signer_count: usize) {
 }
 
 /// Print when a block is signed by a POA signer.
-pub fn print_block_signed(block_number: u64, signer: &Address, in_turn: bool) {
-    let turn = if in_turn { "in-turn".green() } else { "out-of-turn".yellow() };
+///
+/// `sign_ms` is the wall-clock time spent on ECDSA signing (Phase 5 timing).
+pub fn print_block_signed(block_number: u64, signer: &Address, in_turn: bool, sign_ms: u64) {
+    let turn = if in_turn {
+        "in-turn".green()
+    } else {
+        "out-of-turn".yellow()
+    };
     println!(
-        "  {} POA block #{} signed by {} ({})",
+        "  {} POA block #{} signed by {} ({}, {}ms)",
         "OK".green().bold(),
         block_number.to_string().cyan(),
         format!("{signer}").cyan(),
         turn,
+        sign_ms.to_string().dimmed(),
     );
 }
 

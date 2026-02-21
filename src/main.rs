@@ -1,9 +1,10 @@
 use example_custom_poa_node::chainspec::{PoaChainSpec, PoaConfig};
 use example_custom_poa_node::cli::Cli;
 use example_custom_poa_node::genesis;
+use example_custom_poa_node::metrics::{BlockMetrics, ChainMetrics};
 use example_custom_poa_node::node::PoaNode;
 use example_custom_poa_node::output;
-use example_custom_poa_node::rpc::{MeowApiServer, MeowRpc};
+use example_custom_poa_node::rpc::{MeowApiServer, MeowRpc}; // Reuse signer manager for RPC signing and block sealing
 use example_custom_poa_node::signer::{self, SignerManager};
 
 use alloy_consensus::BlockHeader;
@@ -118,20 +119,30 @@ async fn main() -> eyre::Result<()> {
     };
 
     // Configure RPC server to listen on all interfaces
-    let http_addr: IpAddr = cli.http_addr.parse().unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
-    let ws_addr: IpAddr = cli.ws_addr.parse().unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+    let http_addr: IpAddr = cli
+        .http_addr
+        .parse()
+        .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+    let ws_addr: IpAddr = cli
+        .ws_addr
+        .parse()
+        .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
 
-    let mut rpc_args = RpcServerArgs::default();
-    rpc_args.http = true;
-    rpc_args.http_addr = http_addr;
-    rpc_args.http_port = cli.http_port;
-    rpc_args.ws = true;
-    rpc_args.ws_addr = ws_addr;
-    rpc_args.ws_port = cli.ws_port;
+    let rpc_args = RpcServerArgs {
+        http: true,
+        http_addr,
+        http_port: cli.http_port,
+        ws: true,
+        ws_addr,
+        ws_port: cli.ws_port,
+        ..Default::default()
+    };
 
     // Configure P2P network (bootnodes, port, discovery)
-    let mut network_args = NetworkArgs::default();
-    network_args.port = cli.port;
+    let mut network_args = NetworkArgs {
+        port: cli.port,
+        ..Default::default()
+    };
     network_args.discovery.port = cli.port;
     if cli.disable_discovery {
         network_args.discovery.disable_discovery = true;
@@ -159,7 +170,11 @@ async fn main() -> eyre::Result<()> {
 
     output::print_config(
         is_dev_mode,
-        if cli.eager_mining { "eager (tx-triggered)" } else { "interval" },
+        if cli.eager_mining {
+            "eager (tx-triggered)"
+        } else {
+            "interval"
+        },
         poa_chain.inner().genesis().gas_limit,
         &http_addr.to_string(),
         cli.http_port,
@@ -171,10 +186,9 @@ async fn main() -> eyre::Result<()> {
     );
 
     // Create the task executor (attaches to current tokio runtime)
-    let tasks = RuntimeBuilder::new(
-        RuntimeConfig::default()
-            .with_tokio(TokioConfig::existing_handle(tokio::runtime::Handle::current())),
-    )
+    let tasks = RuntimeBuilder::new(RuntimeConfig::default().with_tokio(
+        TokioConfig::existing_handle(tokio::runtime::Handle::current()),
+    ))
     .build()
     .map_err(|e| eyre::eyre!("{e}"))?;
 
@@ -200,7 +214,9 @@ async fn main() -> eyre::Result<()> {
         .node(
             PoaNode::new(chain_spec_arc.clone())
                 .with_dev_mode(is_dev_mode)
-                .with_signer_manager(signer_manager.clone()),
+                .with_signer_manager(signer_manager.clone())
+                .with_cache_size(cli.cache_size)
+                .with_max_contract_size(cli.max_contract_size),
         )
         .extend_rpc_modules(move |ctx| {
             let meow_rpc = MeowRpc::new(rpc_chain_spec, rpc_signer_manager, rpc_dev_mode);
@@ -213,9 +229,14 @@ async fn main() -> eyre::Result<()> {
 
     output::print_node_started(poa_chain.inner().genesis_hash());
 
+    // Set up performance metrics (Phase 5)
+    let chain_metrics = ChainMetrics::default_window();
+    let metrics_interval = cli.metrics_interval;
+
     // Spawn block monitoring task (single subscription)
     let monitoring_chain_spec = chain_spec_arc.clone();
     let monitoring_signer_manager = signer_manager.clone();
+    let monitoring_metrics = chain_metrics.clone();
     tokio::spawn(async move {
         let mut block_stream = node.provider.canonical_state_stream();
 
@@ -223,6 +244,7 @@ async fn main() -> eyre::Result<()> {
             let block = notification.tip();
             let block_num = block.header().number();
             let tx_count = block.body().transactions().count();
+            let gas_used = block.header().gas_used();
 
             // Determine which signer should sign this block (round-robin)
             let signers = monitoring_chain_spec.signers();
@@ -233,8 +255,11 @@ async fn main() -> eyre::Result<()> {
             let signer_index = (block_num as usize) % signers.len();
             let expected_signer = signers[signer_index];
 
+            // Determine if this is an in-turn block for metrics
+            let in_turn = monitoring_signer_manager.has_signer(&expected_signer).await;
+
             // Check if we have the key for the expected signer
-            if monitoring_signer_manager.has_signer(&expected_signer).await {
+            if in_turn {
                 output::print_block_in_turn(block_num, tx_count, &expected_signer);
             } else {
                 let our_addresses = monitoring_signer_manager.signer_addresses().await;
@@ -244,6 +269,28 @@ async fn main() -> eyre::Result<()> {
                 } else {
                     output::print_block_observed(block_num, tx_count, &expected_signer);
                 }
+            }
+
+            // Record block metrics (Phase 5)
+            let block_metrics = BlockMetrics {
+                block_number: block_num,
+                tx_count,
+                gas_used,
+                build_duration: std::time::Duration::ZERO, // actual timing requires payload hook
+                sign_duration: std::time::Duration::ZERO,
+                in_turn,
+            };
+            monitoring_metrics.record_block(&block_metrics);
+
+            // Print metrics report at configured interval
+            if metrics_interval > 0 && block_num > 0 && block_num.is_multiple_of(metrics_interval) {
+                let snap = monitoring_metrics.snapshot();
+                println!(
+                    "  [metrics] block={} total_txs={} in_turn_rate={:.1}%",
+                    block_num,
+                    snap.total_txs,
+                    snap.in_turn_rate() * 100.0,
+                );
             }
         }
     });

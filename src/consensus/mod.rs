@@ -8,8 +8,8 @@
 
 pub mod errors;
 
-pub use errors::PoaConsensusError;
 pub use crate::constants::{ADDRESS_LENGTH, EXTRA_SEAL_LENGTH, EXTRA_VANITY_LENGTH};
+pub use errors::PoaConsensusError;
 
 use crate::chainspec::PoaChainSpec;
 use alloy_consensus::{BlockHeader, Header};
@@ -33,12 +33,18 @@ pub struct PoaConsensus {
 impl PoaConsensus {
     /// Create a new POA consensus instance (production mode - strict validation)
     pub fn new(chain_spec: Arc<PoaChainSpec>) -> Self {
-        Self { chain_spec, dev_mode: false }
+        Self {
+            chain_spec,
+            dev_mode: false,
+        }
     }
 
     /// Create a new POA consensus instance in dev mode (relaxed validation)
     pub fn new_dev(chain_spec: Arc<PoaChainSpec>) -> Self {
-        Self { chain_spec, dev_mode: true }
+        Self {
+            chain_spec,
+            dev_mode: true,
+        }
     }
 
     /// Set dev mode on the consensus instance
@@ -112,7 +118,7 @@ impl PoaConsensus {
 
     /// Check if this is an epoch block (where signer list is updated)
     pub fn is_epoch_block(&self, block_number: u64) -> bool {
-        block_number % self.chain_spec.epoch() == 0
+        block_number.is_multiple_of(self.chain_spec.epoch())
     }
 
     /// Validate the difficulty field.
@@ -151,7 +157,7 @@ impl PoaConsensus {
         // In epoch blocks, format is: vanity (32) + signers (N*20) + seal (65)
         let signers_data_len = extra_data.len() - EXTRA_VANITY_LENGTH - EXTRA_SEAL_LENGTH;
 
-        if signers_data_len % ADDRESS_LENGTH != 0 {
+        if !signers_data_len.is_multiple_of(ADDRESS_LENGTH) {
             return Err(PoaConsensusError::InvalidSignerList);
         }
 
@@ -213,7 +219,9 @@ impl PoaConsensus {
     pub fn compare_chains(&self, chain_a: &[Header], chain_b: &[Header]) -> std::cmp::Ordering {
         let score_a = self.score_chain(chain_a);
         let score_b = self.score_chain(chain_b);
-        score_a.cmp(&score_b).then_with(|| chain_a.len().cmp(&chain_b.len()))
+        score_a
+            .cmp(&score_b)
+            .then_with(|| chain_a.len().cmp(&chain_b.len()))
     }
 }
 
@@ -247,14 +255,17 @@ impl HeaderValidator<Header> for PoaConsensus {
             }
 
             // Recover signer from the signature in extra_data
-            let signer = self.recover_signer(inner_header).map_err(|e| -> ConsensusError {
-                ConsensusError::Custom(std::sync::Arc::new(e))
-            })?;
+            let signer = self
+                .recover_signer(inner_header)
+                .map_err(|e| -> ConsensusError {
+                    ConsensusError::Custom(std::sync::Arc::new(e))
+                })?;
 
             // Verify the signer is in the authorized signers list
-            self.validate_signer(&signer).map_err(|e| -> ConsensusError {
-                ConsensusError::Custom(std::sync::Arc::new(e))
-            })?;
+            self.validate_signer(&signer)
+                .map_err(|e| -> ConsensusError {
+                    ConsensusError::Custom(std::sync::Arc::new(e))
+                })?;
         }
 
         Ok(())
@@ -276,7 +287,11 @@ impl HeaderValidator<Header> for PoaConsensus {
         // Validate parent hash
         if header.header().parent_hash() != parent.hash() {
             return Err(ConsensusError::ParentHashMismatch(
-                GotExpected { got: header.header().parent_hash(), expected: parent.hash() }.into(),
+                GotExpected {
+                    got: header.header().parent_hash(),
+                    expected: parent.hash(),
+                }
+                .into(),
             ));
         }
 
@@ -336,15 +351,13 @@ where
         // Validate extra_data has minimum length for POA (vanity + seal)
         let extra_data = block.header().extra_data();
         let min_length = EXTRA_VANITY_LENGTH + EXTRA_SEAL_LENGTH;
-        if extra_data.len() < min_length {
-            if !self.dev_mode {
-                // In production mode, reject blocks with invalid extra_data
-                return Err(PoaConsensusError::ExtraDataTooShort {
-                    expected: min_length,
-                    got: extra_data.len(),
-                }
-                .into());
+        if extra_data.len() < min_length && !self.dev_mode {
+            // In production mode, reject blocks with invalid extra_data
+            return Err(PoaConsensusError::ExtraDataTooShort {
+                expected: min_length,
+                got: extra_data.len(),
             }
+            .into());
             // In dev mode, log but don't reject (blocks are unsigned)
         }
 
@@ -387,14 +400,22 @@ where
             let header_receipt_root = block.header().receipts_root();
             if header_receipt_root != receipt_root {
                 return Err(ConsensusError::BodyReceiptRootDiff(
-                    GotExpected { got: receipt_root, expected: header_receipt_root }.into(),
+                    GotExpected {
+                        got: receipt_root,
+                        expected: header_receipt_root,
+                    }
+                    .into(),
                 ));
             }
 
             let header_logs_bloom = block.header().logs_bloom();
             if header_logs_bloom != logs_bloom {
                 return Err(ConsensusError::BodyBloomLogDiff(
-                    GotExpected { got: logs_bloom, expected: header_logs_bloom }.into(),
+                    GotExpected {
+                        got: logs_bloom,
+                        expected: header_logs_bloom,
+                    }
+                    .into(),
                 ));
             }
         }
@@ -465,7 +486,9 @@ mod tests {
     #[test]
     fn test_validate_signer_unauthorized() {
         let consensus = production_consensus();
-        let fake_signer: Address = "0x0000000000000000000000000000000000000099".parse().unwrap();
+        let fake_signer: Address = "0x0000000000000000000000000000000000000099"
+            .parse()
+            .unwrap();
         let result = consensus.validate_signer(&fake_signer);
         assert!(result.is_err());
         match result.unwrap_err() {
@@ -712,7 +735,7 @@ mod tests {
         let child = Header {
             number: 1,
             gas_limit: 30_000_000,
-            timestamp: 101, // Only 1s after parent, but block_period is 2s
+            timestamp: 100, // Same as parent — too early (block_period is 1s, need > parent)
             parent_hash: sealed_parent.hash(),
             ..Default::default()
         };
@@ -805,8 +828,12 @@ mod tests {
     fn test_extract_signers_from_epoch_block() {
         let consensus = production_consensus();
 
-        let signer1: Address = "0x0000000000000000000000000000000000000001".parse().unwrap();
-        let signer2: Address = "0x0000000000000000000000000000000000000002".parse().unwrap();
+        let signer1: Address = "0x0000000000000000000000000000000000000001"
+            .parse()
+            .unwrap();
+        let signer2: Address = "0x0000000000000000000000000000000000000002"
+            .parse()
+            .unwrap();
 
         // Build extra_data: vanity (32) + 2 signers (40) + seal (65)
         let mut extra_data = vec![0u8; EXTRA_VANITY_LENGTH];
@@ -890,12 +917,17 @@ mod tests {
     // FullConsensus trait: validate_block_post_execution tests
     // =========================================================================
 
-    use reth_ethereum::BlockBody;
     use alloy_primitives::Bloom;
+    use reth_ethereum::BlockBody;
     use reth_execution_types::BlockExecutionResult;
     use reth_primitives_traits::RecoveredBlock;
 
-    fn make_recovered_block(gas_used: u64, gas_limit: u64, receipts_root: B256, logs_bloom: Bloom) -> RecoveredBlock<reth_ethereum::Block> {
+    fn make_recovered_block(
+        gas_used: u64,
+        gas_limit: u64,
+        receipts_root: B256,
+        logs_bloom: Bloom,
+    ) -> RecoveredBlock<reth_ethereum::Block> {
         let header = Header {
             gas_used,
             gas_limit,
@@ -924,12 +956,10 @@ mod tests {
         let block = make_recovered_block(1000, 30_000_000, B256::ZERO, Bloom::ZERO);
         let result = make_execution_result(1000);
 
-        let validation: Result<(), ConsensusError> = FullConsensus::<reth_ethereum::EthPrimitives>::validate_block_post_execution(
-            &consensus,
-            &block,
-            &result,
-            None,
-        );
+        let validation: Result<(), ConsensusError> =
+            FullConsensus::<reth_ethereum::EthPrimitives>::validate_block_post_execution(
+                &consensus, &block, &result, None,
+            );
         assert!(validation.is_ok());
     }
 
@@ -939,12 +969,10 @@ mod tests {
         let block = make_recovered_block(1000, 30_000_000, B256::ZERO, Bloom::ZERO);
         let result = make_execution_result(2000); // Mismatch: header says 1000, execution says 2000
 
-        let validation: Result<(), ConsensusError> = FullConsensus::<reth_ethereum::EthPrimitives>::validate_block_post_execution(
-            &consensus,
-            &block,
-            &result,
-            None,
-        );
+        let validation: Result<(), ConsensusError> =
+            FullConsensus::<reth_ethereum::EthPrimitives>::validate_block_post_execution(
+                &consensus, &block, &result, None,
+            );
         assert!(validation.is_err());
         match validation.unwrap_err() {
             ConsensusError::BlockGasUsed { gas, .. } => {
@@ -965,12 +993,13 @@ mod tests {
         let wrong_root = B256::from([0xBB; 32]); // Different from header's receipts_root
         let receipt_root_bloom = Some((wrong_root, Bloom::ZERO));
 
-        let validation: Result<(), ConsensusError> = FullConsensus::<reth_ethereum::EthPrimitives>::validate_block_post_execution(
-            &consensus,
-            &block,
-            &result,
-            receipt_root_bloom,
-        );
+        let validation: Result<(), ConsensusError> =
+            FullConsensus::<reth_ethereum::EthPrimitives>::validate_block_post_execution(
+                &consensus,
+                &block,
+                &result,
+                receipt_root_bloom,
+            );
         assert!(validation.is_err());
     }
 
@@ -984,12 +1013,13 @@ mod tests {
         let wrong_bloom = Bloom::from([0xBB; 256]);
         let receipt_root_bloom = Some((B256::ZERO, wrong_bloom));
 
-        let validation: Result<(), ConsensusError> = FullConsensus::<reth_ethereum::EthPrimitives>::validate_block_post_execution(
-            &consensus,
-            &block,
-            &result,
-            receipt_root_bloom,
-        );
+        let validation: Result<(), ConsensusError> =
+            FullConsensus::<reth_ethereum::EthPrimitives>::validate_block_post_execution(
+                &consensus,
+                &block,
+                &result,
+                receipt_root_bloom,
+            );
         assert!(validation.is_err());
     }
 
@@ -1000,12 +1030,10 @@ mod tests {
         let result = make_execution_result(5000);
 
         // None means skip receipt root and logs bloom check
-        let validation: Result<(), ConsensusError> = FullConsensus::<reth_ethereum::EthPrimitives>::validate_block_post_execution(
-            &consensus,
-            &block,
-            &result,
-            None,
-        );
+        let validation: Result<(), ConsensusError> =
+            FullConsensus::<reth_ethereum::EthPrimitives>::validate_block_post_execution(
+                &consensus, &block, &result, None,
+            );
         assert!(validation.is_ok());
     }
 
@@ -1013,7 +1041,11 @@ mod tests {
     // Consensus trait: validate_body_against_header, validate_block_pre_execution
     // =========================================================================
 
-    fn make_sealed_block(gas_used: u64, gas_limit: u64, extra_data_len: usize) -> SealedBlock<reth_ethereum::Block> {
+    fn make_sealed_block(
+        gas_used: u64,
+        gas_limit: u64,
+        extra_data_len: usize,
+    ) -> SealedBlock<reth_ethereum::Block> {
         let header = Header {
             gas_used,
             gas_limit,
@@ -1036,11 +1068,10 @@ mod tests {
         let sealed = SealedHeader::seal_slow(header);
         let body = BlockBody::default();
 
-        let result: Result<(), ConsensusError> = Consensus::<reth_ethereum::Block>::validate_body_against_header(
-            &consensus,
-            &body,
-            &sealed,
-        );
+        let result: Result<(), ConsensusError> =
+            Consensus::<reth_ethereum::Block>::validate_body_against_header(
+                &consensus, &body, &sealed,
+            );
         assert!(result.is_ok());
     }
 
@@ -1055,11 +1086,10 @@ mod tests {
         let sealed = SealedHeader::seal_slow(header);
         let body = BlockBody::default();
 
-        let result: Result<(), ConsensusError> = Consensus::<reth_ethereum::Block>::validate_body_against_header(
-            &consensus,
-            &body,
-            &sealed,
-        );
+        let result: Result<(), ConsensusError> =
+            Consensus::<reth_ethereum::Block>::validate_body_against_header(
+                &consensus, &body, &sealed,
+            );
         assert!(result.is_err());
     }
 
@@ -1068,10 +1098,8 @@ mod tests {
         let consensus = production_consensus();
         let sealed = make_sealed_block(0, 30_000_000, 10); // Too short for POA
 
-        let result: Result<(), ConsensusError> = Consensus::<reth_ethereum::Block>::validate_block_pre_execution(
-            &consensus,
-            &sealed,
-        );
+        let result: Result<(), ConsensusError> =
+            Consensus::<reth_ethereum::Block>::validate_block_pre_execution(&consensus, &sealed);
         assert!(result.is_err());
     }
 
@@ -1080,10 +1108,8 @@ mod tests {
         let consensus = dev_consensus();
         let sealed = make_sealed_block(0, 30_000_000, 10); // Short but dev mode allows it
 
-        let result: Result<(), ConsensusError> = Consensus::<reth_ethereum::Block>::validate_block_pre_execution(
-            &consensus,
-            &sealed,
-        );
+        let result: Result<(), ConsensusError> =
+            Consensus::<reth_ethereum::Block>::validate_block_pre_execution(&consensus, &sealed);
         assert!(result.is_ok());
     }
 
@@ -1115,7 +1141,9 @@ mod tests {
             ..Default::default()
         };
         let sealed_child = SealedHeader::seal_slow(child_increase);
-        assert!(consensus.validate_header_against_parent(&sealed_child, &sealed_parent).is_ok());
+        assert!(consensus
+            .validate_header_against_parent(&sealed_child, &sealed_parent)
+            .is_ok());
 
         // Exactly at max decrease boundary should pass
         let child_decrease = Header {
@@ -1126,7 +1154,9 @@ mod tests {
             ..Default::default()
         };
         let sealed_child = SealedHeader::seal_slow(child_decrease);
-        assert!(consensus.validate_header_against_parent(&sealed_child, &sealed_parent).is_ok());
+        assert!(consensus
+            .validate_header_against_parent(&sealed_child, &sealed_parent)
+            .is_ok());
     }
 
     #[test]
@@ -1151,7 +1181,9 @@ mod tests {
             ..Default::default()
         };
         let sealed_child = SealedHeader::seal_slow(child);
-        assert!(consensus.validate_header_against_parent(&sealed_child, &sealed_parent).is_ok());
+        assert!(consensus
+            .validate_header_against_parent(&sealed_child, &sealed_parent)
+            .is_ok());
 
         // One second before should fail
         let child_too_early = Header {
@@ -1162,7 +1194,9 @@ mod tests {
             ..Default::default()
         };
         let sealed_child_early = SealedHeader::seal_slow(child_too_early);
-        assert!(consensus.validate_header_against_parent(&sealed_child_early, &sealed_parent).is_err());
+        assert!(consensus
+            .validate_header_against_parent(&sealed_child_early, &sealed_parent)
+            .is_err());
     }
 
     // =========================================================================
@@ -1206,34 +1240,44 @@ mod tests {
 
         // 2. validate_block_pre_execution should pass (extra_data long enough)
         let body = BlockBody::default();
-        let block = reth_ethereum::Block { header: signed_header.clone(), body };
+        let block = reth_ethereum::Block {
+            header: signed_header.clone(),
+            body,
+        };
         let sealed_block = SealedBlock::seal_slow(block);
         let pre_exec_result: Result<(), ConsensusError> =
-            Consensus::<reth_ethereum::Block>::validate_block_pre_execution(&consensus, &sealed_block);
-        assert!(pre_exec_result.is_ok(), "Pre-execution validation should pass");
+            Consensus::<reth_ethereum::Block>::validate_block_pre_execution(
+                &consensus,
+                &sealed_block,
+            );
+        assert!(
+            pre_exec_result.is_ok(),
+            "Pre-execution validation should pass"
+        );
 
         // 3. validate_block_post_execution should pass (matching gas_used)
         let body2 = BlockBody::default();
-        let block2 = reth_ethereum::Block { header: signed_header, body: body2 };
+        let block2 = reth_ethereum::Block {
+            header: signed_header,
+            body: body2,
+        };
         let sealed2 = SealedBlock::seal_slow(block2);
         let recovered = RecoveredBlock::new_sealed(sealed2, vec![]);
         let exec_result = make_execution_result(0);
-        let post_exec: Result<(), ConsensusError> = FullConsensus::<reth_ethereum::EthPrimitives>::validate_block_post_execution(
-            &consensus,
-            &recovered,
-            &exec_result,
-            None,
-        );
+        let post_exec: Result<(), ConsensusError> =
+            FullConsensus::<reth_ethereum::EthPrimitives>::validate_block_post_execution(
+                &consensus,
+                &recovered,
+                &exec_result,
+                None,
+            );
         assert!(post_exec.is_ok(), "Post-execution validation should pass");
     }
 
     // ─── Fork Choice Tests ──────────────────────────────────────────────
 
     /// Helper: create a signed header for a specific signer at a given block number.
-    async fn build_signed_header(
-        block_number: u64,
-        signer_key_index: usize,
-    ) -> Header {
+    async fn build_signed_header(block_number: u64, signer_key_index: usize) -> Header {
         let manager = Arc::new(SignerManager::new());
         let address = manager
             .add_signer_from_hex(dev::DEV_PRIVATE_KEYS[signer_key_index])
@@ -1430,13 +1474,16 @@ mod tests {
         let chain = build_chain_segment(1, 10, B256::ZERO).await;
 
         // Validate each block sequentially (simulates full sync)
-        for i in 0..chain.len() {
-            let (_, sealed) = &chain[i];
-
+        for (i, (_, sealed)) in chain.iter().enumerate() {
             // validate_header: checks signature
             let result: Result<(), ConsensusError> =
                 HeaderValidator::validate_header(&consensus, sealed);
-            assert!(result.is_ok(), "Block {} header validation failed: {:?}", i + 1, result);
+            assert!(
+                result.is_ok(),
+                "Block {} header validation failed: {:?}",
+                i + 1,
+                result
+            );
 
             // validate_header_against_parent: checks parent hash, number, timestamp
             if i > 0 {
@@ -1537,8 +1584,7 @@ mod tests {
         let chain = build_chain_segment(1, 100, B256::ZERO).await;
 
         // All 100 blocks should validate
-        for i in 0..chain.len() {
-            let (_, sealed) = &chain[i];
+        for (i, (_, sealed)) in chain.iter().enumerate() {
             let result: Result<(), ConsensusError> =
                 HeaderValidator::validate_header(&consensus, sealed);
             assert!(result.is_ok(), "Block {} validation failed", i + 1);
@@ -1560,16 +1606,17 @@ mod tests {
     async fn test_3_signer_round_robin_production() {
         // Create 3 independent consensus instances (same chain spec, same signers)
         let chain = Arc::new(crate::chainspec::PoaChainSpec::dev_chain());
-        let nodes: Vec<PoaConsensus> = (0..3)
-            .map(|_| PoaConsensus::new(chain.clone()))
-            .collect();
+        let nodes: Vec<PoaConsensus> = (0..3).map(|_| PoaConsensus::new(chain.clone())).collect();
 
         // Each node has a different signer key
         let mut sealers = Vec::new();
         let mut addresses = Vec::new();
         for i in 0..3 {
             let mgr = Arc::new(SignerManager::new());
-            let addr = mgr.add_signer_from_hex(dev::DEV_PRIVATE_KEYS[i]).await.unwrap();
+            let addr = mgr
+                .add_signer_from_hex(dev::DEV_PRIVATE_KEYS[i])
+                .await
+                .unwrap();
             addresses.push(addr);
             sealers.push(BlockSealer::new(mgr));
         }
@@ -1602,7 +1649,10 @@ mod tests {
                 assert!(
                     result.is_ok(),
                     "Node {} rejected block {} signed by signer {}: {:?}",
-                    node_idx, block_num, signer_idx, result
+                    node_idx,
+                    block_num,
+                    signer_idx,
+                    result
                 );
 
                 if let Some(ref parent) = prev_sealed {
@@ -1611,7 +1661,9 @@ mod tests {
                     assert!(
                         result.is_ok(),
                         "Node {} rejected block {} parent chain: {:?}",
-                        node_idx, block_num, result
+                        node_idx,
+                        block_num,
+                        result
                     );
                 }
             }
@@ -1645,13 +1697,14 @@ mod tests {
     #[tokio::test]
     async fn test_3_signer_unauthorized_signer_rejected() {
         let chain = Arc::new(crate::chainspec::PoaChainSpec::dev_chain());
-        let nodes: Vec<PoaConsensus> = (0..3)
-            .map(|_| PoaConsensus::new(chain.clone()))
-            .collect();
+        let nodes: Vec<PoaConsensus> = (0..3).map(|_| PoaConsensus::new(chain.clone())).collect();
 
         // Signer 5 is NOT in the 3-signer dev chain
         let mgr = Arc::new(SignerManager::new());
-        let addr = mgr.add_signer_from_hex(dev::DEV_PRIVATE_KEYS[5]).await.unwrap();
+        let addr = mgr
+            .add_signer_from_hex(dev::DEV_PRIVATE_KEYS[5])
+            .await
+            .unwrap();
         let sealer = BlockSealer::new(mgr);
 
         let header = Header {
@@ -1697,7 +1750,10 @@ mod tests {
             };
 
             let mgr = Arc::new(SignerManager::new());
-            let addr = mgr.add_signer_from_hex(dev::DEV_PRIVATE_KEYS[0]).await.unwrap();
+            let addr = mgr
+                .add_signer_from_hex(dev::DEV_PRIVATE_KEYS[0])
+                .await
+                .unwrap();
             let sealer = BlockSealer::new(mgr);
             let signed = sealer.seal_header(header, &addr).await.unwrap();
             let sealed = SealedHeader::seal_slow(signed.clone());
@@ -1713,7 +1769,7 @@ mod tests {
 
         // Check in-turn vs out-of-turn
         // Dev signers: index 0, 1, 2 — signer 0 is in-turn at block 0, 3, 6, ...
-        assert_eq!(consensus.is_in_turn(&headers[2]), Some(true));  // block 3 → idx 0 ✓
+        assert_eq!(consensus.is_in_turn(&headers[2]), Some(true)); // block 3 → idx 0 ✓
         assert_eq!(consensus.is_in_turn(&headers[0]), Some(false)); // block 1 → idx 1 expected, got 0
         assert_eq!(consensus.is_in_turn(&headers[1]), Some(false)); // block 2 → idx 2 expected, got 0
     }
@@ -1722,7 +1778,7 @@ mod tests {
 
     /// Helper: create a consensus with a custom signer list
     fn consensus_with_signers(signer_addrs: Vec<Address>) -> PoaConsensus {
-        use crate::chainspec::{PoaConfig, PoaChainSpec};
+        use crate::chainspec::{PoaChainSpec, PoaConfig};
         let genesis = crate::genesis::create_dev_genesis();
         let poa_config = PoaConfig {
             period: 2,
@@ -1736,7 +1792,9 @@ mod tests {
     /// Helper: derive address from a dev private key index
     async fn dev_address(key_index: usize) -> Address {
         let mgr = Arc::new(SignerManager::new());
-        mgr.add_signer_from_hex(dev::DEV_PRIVATE_KEYS[key_index]).await.unwrap()
+        mgr.add_signer_from_hex(dev::DEV_PRIVATE_KEYS[key_index])
+            .await
+            .unwrap()
     }
 
     #[tokio::test]
@@ -1754,7 +1812,10 @@ mod tests {
         for block_num in 1u64..=15 {
             let signer_idx = (block_num as usize) % 5;
             let mgr = Arc::new(SignerManager::new());
-            let addr = mgr.add_signer_from_hex(dev::DEV_PRIVATE_KEYS[signer_idx]).await.unwrap();
+            let addr = mgr
+                .add_signer_from_hex(dev::DEV_PRIVATE_KEYS[signer_idx])
+                .await
+                .unwrap();
             let sealer = BlockSealer::new(mgr);
 
             let header = Header {
@@ -1770,7 +1831,12 @@ mod tests {
 
             let result: Result<(), ConsensusError> =
                 HeaderValidator::validate_header(&consensus, &sealed);
-            assert!(result.is_ok(), "Block {} by signer {} failed", block_num, signer_idx);
+            assert!(
+                result.is_ok(),
+                "Block {} by signer {} failed",
+                block_num,
+                signer_idx
+            );
 
             prev_hash = sealed.hash();
         }
@@ -1808,13 +1874,19 @@ mod tests {
         let sealed = SealedHeader::seal_slow(header);
         let result: Result<(), ConsensusError> =
             HeaderValidator::validate_header(&consensus, &sealed);
-        assert!(result.is_ok(), "Signer 3 should be accepted after epoch update");
+        assert!(
+            result.is_ok(),
+            "Signer 3 should be accepted after epoch update"
+        );
 
         let header = build_signed_header(11, 4).await;
         let sealed = SealedHeader::seal_slow(header);
         let result: Result<(), ConsensusError> =
             HeaderValidator::validate_header(&consensus, &sealed);
-        assert!(result.is_ok(), "Signer 4 should be accepted after epoch update");
+        assert!(
+            result.is_ok(),
+            "Signer 4 should be accepted after epoch update"
+        );
     }
 
     #[tokio::test]
@@ -1904,7 +1976,10 @@ mod tests {
         };
 
         let mgr = Arc::new(SignerManager::new());
-        let addr = mgr.add_signer_from_hex(dev::DEV_PRIVATE_KEYS[0]).await.unwrap();
+        let addr = mgr
+            .add_signer_from_hex(dev::DEV_PRIVATE_KEYS[0])
+            .await
+            .unwrap();
         let sealer = BlockSealer::new(mgr);
 
         let signed_a = sealer.seal_header(header_a, &addr).await.unwrap();
@@ -1923,8 +1998,11 @@ mod tests {
         assert!(result_b.is_ok());
 
         // But they have different hashes (different state_root → different seal_hash → different sig)
-        assert_ne!(sealed_a.hash(), sealed_b.hash(),
-            "Double-signed blocks at same height should have different hashes");
+        assert_ne!(
+            sealed_a.hash(),
+            sealed_b.hash(),
+            "Double-signed blocks at same height should have different hashes"
+        );
 
         // Recover signer from both — same signer produced both (double signing evidence)
         let signer_a = consensus.recover_signer(&signed_a).unwrap();
@@ -1943,7 +2021,10 @@ mod tests {
         for i in 1u64..=3 {
             let signer_idx = (i as usize) % 3;
             let mgr = Arc::new(SignerManager::new());
-            let addr = mgr.add_signer_from_hex(dev::DEV_PRIVATE_KEYS[signer_idx]).await.unwrap();
+            let addr = mgr
+                .add_signer_from_hex(dev::DEV_PRIVATE_KEYS[signer_idx])
+                .await
+                .unwrap();
             let sealer = BlockSealer::new(mgr);
             let header = Header {
                 number: i,
@@ -1964,7 +2045,10 @@ mod tests {
         let mut hash_a = prev_hash;
         for i in 4u64..=6 {
             let mgr = Arc::new(SignerManager::new());
-            let addr = mgr.add_signer_from_hex(dev::DEV_PRIVATE_KEYS[0]).await.unwrap();
+            let addr = mgr
+                .add_signer_from_hex(dev::DEV_PRIVATE_KEYS[0])
+                .await
+                .unwrap();
             let sealer = BlockSealer::new(mgr);
             let header = Header {
                 number: i,
@@ -1986,7 +2070,10 @@ mod tests {
         for i in 4u64..=6 {
             let signer_idx = (i as usize) % 3;
             let mgr = Arc::new(SignerManager::new());
-            let addr = mgr.add_signer_from_hex(dev::DEV_PRIVATE_KEYS[signer_idx]).await.unwrap();
+            let addr = mgr
+                .add_signer_from_hex(dev::DEV_PRIVATE_KEYS[signer_idx])
+                .await
+                .unwrap();
             let sealer = BlockSealer::new(mgr);
             let header = Header {
                 number: i,
@@ -2005,18 +2092,23 @@ mod tests {
         // Both forks are valid
         for h in &fork_a {
             let sealed = SealedHeader::seal_slow(h.clone());
-            let r: Result<(), ConsensusError> = HeaderValidator::validate_header(&consensus, &sealed);
+            let r: Result<(), ConsensusError> =
+                HeaderValidator::validate_header(&consensus, &sealed);
             assert!(r.is_ok(), "Fork A block should be valid");
         }
         for h in &fork_b {
             let sealed = SealedHeader::seal_slow(h.clone());
-            let r: Result<(), ConsensusError> = HeaderValidator::validate_header(&consensus, &sealed);
+            let r: Result<(), ConsensusError> =
+                HeaderValidator::validate_header(&consensus, &sealed);
             assert!(r.is_ok(), "Fork B block should be valid");
         }
 
         // Fork choice: B should win (more in-turn blocks)
         let score_a = consensus.score_chain(&fork_a);
         let score_b = consensus.score_chain(&fork_b);
-        assert!(score_b > score_a, "Fork B (round-robin) should score higher than Fork A (single signer)");
+        assert!(
+            score_b > score_a,
+            "Fork B (round-robin) should score higher than Fork A (single signer)"
+        );
     }
 }

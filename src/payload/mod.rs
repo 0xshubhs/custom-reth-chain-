@@ -11,8 +11,11 @@ pub mod builder;
 
 pub use builder::PoaPayloadBuilderBuilder;
 
+use crate::cache::{CachedStorageReader, SharedCache};
 use crate::chainspec::PoaChainSpec;
 use crate::consensus::{EXTRA_SEAL_LENGTH, EXTRA_VANITY_LENGTH};
+use crate::genesis::addresses::SIGNER_REGISTRY_ADDRESS;
+use crate::metrics::PhaseTimer;
 use crate::onchain::{read_signer_list, StateProviderStorageReader};
 use crate::output;
 use crate::signer::{BlockSealer, SignerManager};
@@ -21,15 +24,13 @@ use reth_basic_payload_builder::{
     BuildArguments, BuildOutcome, MissingPayloadBehaviour, PayloadBuilder, PayloadConfig,
 };
 use reth_chainspec::{ChainSpecProvider, EthereumHardforks};
+use reth_ethereum::storage::StateProviderFactory;
 use reth_ethereum::EthPrimitives;
-use reth_ethereum_engine_primitives::{
-    EthBuiltPayload, EthPayloadBuilderAttributes,
-};
+use reth_ethereum_engine_primitives::{EthBuiltPayload, EthPayloadBuilderAttributes};
 use reth_evm::{ConfigureEvm, NextBlockEnvAttributes};
 use reth_payload_builder_primitives::PayloadBuilderError;
 use reth_payload_primitives::BuiltPayload;
 use reth_primitives_traits::block::SealedBlock;
-use reth_ethereum::storage::StateProviderFactory;
 use reth_transaction_pool::{PoolTransaction, TransactionPool};
 use std::sync::Arc;
 
@@ -39,10 +40,14 @@ use std::sync::Arc;
 /// to add POA signatures, set difficulty, and embed signer lists at epoch blocks.
 /// At epoch blocks, it also refreshes the live signer cache from the on-chain
 /// `SignerRegistry` contract so that `PoaConsensus` picks up governance changes.
+///
+/// On-chain storage reads go through a [`SharedCache`] (Phase 5.31) to avoid
+/// redundant MDBX I/O across consecutive block builds.
 #[derive(Debug, Clone)]
 pub struct PoaPayloadBuilder<Pool, Client, EvmConfig> {
     /// The inner Ethereum payload builder that does the actual block construction.
-    pub(crate) inner: reth_ethereum_payload_builder::EthereumPayloadBuilder<Pool, Client, EvmConfig>,
+    pub(crate) inner:
+        reth_ethereum_payload_builder::EthereumPayloadBuilder<Pool, Client, EvmConfig>,
     /// POA chain specification with signer list, epoch, period.
     pub(crate) chain_spec: Arc<PoaChainSpec>,
     /// Signer manager with signing keys.
@@ -51,15 +56,16 @@ pub struct PoaPayloadBuilder<Pool, Client, EvmConfig> {
     pub(crate) dev_mode: bool,
     /// State provider factory for reading on-chain contract storage.
     pub(crate) client: Client,
+    /// Hot state cache shared across block builds (Phase 5.31).
+    pub(crate) cache: SharedCache,
 }
 
 impl<Pool, Client, EvmConfig> PayloadBuilder for PoaPayloadBuilder<Pool, Client, EvmConfig>
 where
     EvmConfig: ConfigureEvm<Primitives = EthPrimitives, NextBlockEnvCtx = NextBlockEnvAttributes>,
     Client: StateProviderFactory + ChainSpecProvider<ChainSpec: EthereumHardforks> + Clone,
-    Pool: TransactionPool<
-        Transaction: PoolTransaction<Consensus = reth_ethereum::TransactionSigned>,
-    >,
+    Pool:
+        TransactionPool<Transaction: PoolTransaction<Consensus = reth_ethereum::TransactionSigned>>,
 {
     type Attributes = EthPayloadBuilderAttributes;
     type BuiltPayload = EthBuiltPayload;
@@ -73,9 +79,15 @@ where
 
         // 2. Post-process: sign the block if we have a signer
         match outcome {
-            BuildOutcome::Better { payload, cached_reads } => {
+            BuildOutcome::Better {
+                payload,
+                cached_reads,
+            } => {
                 let signed_payload = self.sign_payload(payload)?;
-                Ok(BuildOutcome::Better { payload: signed_payload, cached_reads })
+                Ok(BuildOutcome::Better {
+                    payload: signed_payload,
+                    cached_reads,
+                })
             }
             BuildOutcome::Freeze(payload) => {
                 let signed_payload = self.sign_payload(payload)?;
@@ -126,14 +138,21 @@ where
         let block = payload.block();
         let block_number = block.header().number;
         let epoch = self.chain_spec.epoch();
-        let is_epoch = block_number > 0 && block_number % epoch == 0;
+        let is_epoch = block_number > 0 && block_number.is_multiple_of(epoch);
 
         // At epoch blocks, refresh live signer list from SignerRegistry.
-        // This propagates on-chain governance changes (add/remove signers) without restart.
+        // Invalidate the cached SignerRegistry slots first so we get the latest governance
+        // state, then re-populate the cache with the fresh read.
         if is_epoch {
             if let Ok(state) = self.client.latest() {
+                // Invalidate stale signer registry entries before refreshing
+                self.cache
+                    .lock()
+                    .expect("cache lock")
+                    .invalidate_address(SIGNER_REGISTRY_ADDRESS);
                 let reader = StateProviderStorageReader(state.as_ref());
-                if let Some(list) = read_signer_list(&reader) {
+                let cached = CachedStorageReader::new_shared(reader, Arc::clone(&self.cache));
+                if let Some(list) = read_signer_list(&cached) {
                     if !list.signers.is_empty() {
                         output::print_epoch_refresh(block_number, list.signers.len());
                         self.chain_spec.update_live_signers(list.signers);
@@ -192,9 +211,7 @@ where
 
         // Build extra_data with POA format
         let mut extra_data = Vec::with_capacity(
-            EXTRA_VANITY_LENGTH
-                + if is_epoch { signers.len() * 20 } else { 0 }
-                + EXTRA_SEAL_LENGTH,
+            EXTRA_VANITY_LENGTH + if is_epoch { signers.len() * 20 } else { 0 } + EXTRA_SEAL_LENGTH,
         );
 
         // Vanity (32 zero bytes)
@@ -211,17 +228,22 @@ where
         extra_data.extend_from_slice(&[0u8; EXTRA_SEAL_LENGTH]);
         header.extra_data = Bytes::from(extra_data);
 
-        // Sign the header
+        // Sign the header (Phase 5: timed for performance metrics)
+        let sign_timer = PhaseTimer::start();
         let sealer = BlockSealer::new(self.signer_manager.clone());
         let signed_header = tokio::task::block_in_place(|| {
             handle.block_on(async { sealer.seal_header(header, &signer_addr).await })
         })
         .map_err(|e| PayloadBuilderError::Other(Box::new(e)))?;
+        let sign_ms = sign_timer.elapsed_ms();
 
-        output::print_block_signed(block_number, &signer_addr, is_in_turn);
+        output::print_block_signed(block_number, &signer_addr, is_in_turn, sign_ms);
 
         // Reconstruct the sealed block with the signed header
-        let new_block = alloy_consensus::Block { header: signed_header, body };
+        let new_block = alloy_consensus::Block {
+            header: signed_header,
+            body,
+        };
         let sealed = SealedBlock::seal_slow(new_block);
 
         Ok(EthBuiltPayload::new(
@@ -382,7 +404,7 @@ mod tests {
 
         // Simulate epoch block extra_data construction
         let block_number = epoch; // First epoch block after genesis
-        let is_epoch = block_number > 0 && block_number % epoch == 0;
+        let is_epoch = block_number > 0 && block_number.is_multiple_of(epoch);
         assert!(is_epoch);
 
         let mut extra_data = Vec::new();
@@ -406,7 +428,7 @@ mod tests {
 
         // Block 1 is not an epoch block
         let block_number = 1u64;
-        let is_epoch = block_number > 0 && block_number % epoch == 0;
+        let is_epoch = block_number > 0 && block_number.is_multiple_of(epoch);
         assert!(!is_epoch);
 
         let mut extra_data = Vec::new();
@@ -445,5 +467,78 @@ mod tests {
         let recovered = consensus.recover_signer(&signed_header).unwrap();
         assert_eq!(recovered, signer_addr);
         assert!(consensus.validate_signer(&recovered).is_ok());
+    }
+
+    // ── Phase 5.31: shared hot state cache wiring ──────────────────────────
+
+    #[tokio::test]
+    async fn test_payload_builder_builder_has_default_cache_size() {
+        let chain = Arc::new(PoaChainSpec::dev_chain());
+        let manager = Arc::new(SignerManager::new());
+        let builder = PoaPayloadBuilderBuilder::new(chain, manager, true);
+        // Default cache size comes from CacheConfig::default()
+        assert!(builder.cache_size > 0);
+    }
+
+    #[tokio::test]
+    async fn test_payload_builder_builder_custom_cache_size() {
+        let chain = Arc::new(PoaChainSpec::dev_chain());
+        let manager = Arc::new(SignerManager::new());
+        let builder =
+            PoaPayloadBuilderBuilder::new(chain, manager, true).with_cache_size(512);
+        assert_eq!(builder.cache_size, 512);
+    }
+
+    #[tokio::test]
+    async fn test_payload_builder_builder_cache_size_clamped_to_one() {
+        let chain = Arc::new(PoaChainSpec::dev_chain());
+        let manager = Arc::new(SignerManager::new());
+        // Zero is clamped to 1
+        let builder = PoaPayloadBuilderBuilder::new(chain, manager, true).with_cache_size(0);
+        assert_eq!(builder.cache_size, 1);
+    }
+
+    #[test]
+    fn test_shared_cache_accessible_across_multiple_readers() {
+        use crate::cache::{CachedStorageReader, HotStateCache};
+        use crate::onchain::StorageReader;
+        use alloy_primitives::{Address, B256, U256};
+        use std::collections::HashMap;
+        use std::sync::{Arc, Mutex};
+
+        // Minimal in-memory StorageReader for this test
+        struct MapStorage(HashMap<(Address, U256), B256>);
+        impl StorageReader for MapStorage {
+            fn read_storage(&self, a: Address, s: U256) -> Option<B256> {
+                self.0.get(&(a, s)).copied()
+            }
+        }
+
+        let cache: SharedCache = Arc::new(Mutex::new(HotStateCache::new(64)));
+
+        let addr = Address::from([1u8; 20]);
+        let slot = U256::from(0u64);
+        let value = B256::from([42u8; 32]);
+
+        // First reader: cache miss → populates shared cache
+        let mut map1 = HashMap::new();
+        map1.insert((addr, slot), value);
+        let reader1 = CachedStorageReader::new_shared(MapStorage(map1), Arc::clone(&cache));
+        let v1 = reader1.read_storage(addr, slot);
+        assert_eq!(v1, Some(value));
+        assert_eq!(reader1.stats().misses, 1);
+        assert_eq!(reader1.stats().hits, 0);
+
+        // Second reader with the SAME shared cache but EMPTY storage:
+        // value must come from the cache, not the inner reader.
+        let reader2 =
+            CachedStorageReader::new_shared(MapStorage(HashMap::new()), Arc::clone(&cache));
+        let v2 = reader2.read_storage(addr, slot);
+        assert_eq!(v2, Some(value), "should come from shared cache");
+        // Stats are shared — cumulative across both readers:
+        // misses=1 (from reader1), hits=1 (from reader2)
+        let stats = reader2.stats();
+        assert_eq!(stats.misses, 1, "reader1 caused 1 miss");
+        assert_eq!(stats.hits, 1, "reader2 caused 1 hit from shared cache");
     }
 }

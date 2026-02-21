@@ -1,7 +1,7 @@
 # Meowchain Architecture
 
 > Comprehensive architecture documentation for the Meowchain POA blockchain built on Reth.
-> 35 Rust source files | 8,004 lines | 224 tests | Chain ID 9323310
+> 39 Rust source files | ~9,500 lines | 303 tests | Chain ID 9323310
 
 ---
 
@@ -48,7 +48,7 @@ graph TB
         subgraph "Reused from Ethereum"
             EP["EthereumPoolBuilder<br/>Transaction Pool"]
             EN["EthereumNetworkBuilder<br/>P2P Networking"]
-            EE["EthereumExecutorBuilder<br/>EVM Execution"]
+            EE["PoaExecutorBuilder<br/>EVM (PoaEvmFactory)"]
         end
 
         subgraph "Meowchain-Specific"
@@ -58,6 +58,9 @@ graph TB
             OC["OnChain Readers<br/>Governance Contracts"]
             RPC["MeowRpc<br/>meow_* Namespace"]
             OUT["Output<br/>Colored Console"]
+            CACHE["HotStateCache<br/>LRU SharedCache"]
+            METRICS["ChainMetrics<br/>PhaseTimer, BlockMetrics"]
+            STATEDIFF["StateDiff<br/>Replica State Sync"]
         end
     end
 
@@ -97,7 +100,7 @@ graph TB
 | Block Signing | BLS signatures | ECDSA in extra_data |
 | Difficulty | Dynamic | Always 0 (Engine API compat) |
 | Governance | EIPs + social consensus | On-chain contracts + Gnosis Safe |
-| Gas Limit | ~30M (protocol) | Governable (30M-1B via ChainConfig) |
+| Gas Limit | ~30M (protocol) | Governable (300M dev / 1B prod via ChainConfig + --max-contract-size) |
 | EVM | Sequential | Sequential (parallel planned) |
 | Hardforks | Frontier through Prague | All active at genesis (block 0) |
 
@@ -111,6 +114,7 @@ graph TD
 
     LIB --> MAIN["main.rs<br/>259 lines"]
     LIB --> NODE["node/<br/>3 files, 459 lines"]
+    LIB --> EVM_MOD["evm/<br/>1 file — PoaEvmFactory + PoaExecutorBuilder"]
     LIB --> CONS["consensus/<br/>2 files, 2,089 lines"]
     LIB --> PAY["payload/<br/>2 files, 580 lines"]
     LIB --> CHAIN["chainspec/<br/>3 files, 661 lines"]
@@ -118,6 +122,9 @@ graph TD
     LIB --> GEN["genesis/<br/>5 files, 1,523 lines"]
     LIB --> OC["onchain/<br/>6 files, 1,108 lines"]
     LIB --> RPC_MOD["rpc/<br/>3 files, 306 lines"]
+    LIB --> CACHE_MOD["cache/<br/>1 file — HotStateCache, SharedCache"]
+    LIB --> METRICS_MOD["metrics/<br/>1 file — PhaseTimer, BlockMetrics, ChainMetrics"]
+    LIB --> STATEDIFF_MOD["statediff/<br/>1 file — StateDiff, AccountDiff"]
     LIB --> CLI_MOD["cli.rs<br/>76 lines"]
     LIB --> CONST["constants.rs<br/>11 lines"]
     LIB --> ERR["errors.rs<br/>2 lines"]
@@ -136,6 +143,12 @@ graph TD
     NODE --> CHAIN
     NODE --> SIGN
     NODE --> OUT
+    NODE --> EVM_MOD
+
+    PAY --> CACHE_MOD
+    PAY --> METRICS_MOD
+    MAIN --> METRICS_MOD
+    MAIN --> STATEDIFF_MOD
 
     PAY --> CHAIN
     PAY --> CONS
@@ -215,13 +228,25 @@ src/
 │   ├── selectors.rs          (24 lines)    ABI function selectors
 │   └── helpers.rs            (54 lines)    encode/decode helpers
 │
-└── rpc/                                    Custom RPC namespace
-    ├── mod.rs                (257 lines)   MeowRpc impl + tests
-    ├── api.rs                (20 lines)    MeowApi trait (jsonrpsee macro)
-    └── types.rs              (29 lines)    ChainConfigResponse, NodeInfoResponse
+├── rpc/                                    Custom RPC namespace
+│   ├── mod.rs                (257 lines)   MeowRpc impl + tests
+│   ├── api.rs                (20 lines)    MeowApi trait (jsonrpsee macro)
+│   └── types.rs              (29 lines)    ChainConfigResponse, NodeInfoResponse
+│
+├── evm/                                    Custom EVM factory (Phase 2)
+│   └── mod.rs                (~120 lines)  PoaEvmFactory (patches CfgEnv), PoaExecutorBuilder
+│
+├── cache/                                  Hot state LRU cache (Phase 5)
+│   └── mod.rs                (~200 lines)  HotStateCache, CachedStorageReader, SharedCache
+│
+├── statediff/                              State diff for replica sync (Phase 5)
+│   └── mod.rs                (~150 lines)  StateDiff, AccountDiff, StorageDiff
+│
+└── metrics/                                Performance metrics (Phase 5)
+    └── mod.rs                (~150 lines)  PhaseTimer, BlockMetrics, ChainMetrics
 ```
 
-**Total: 35 files, 8,004 lines, 224 tests**
+**Total: ~39 files, ~9,500 lines, 303 tests**
 
 ---
 

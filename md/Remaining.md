@@ -1,6 +1,6 @@
 ### Meowchain Custom POA Chain - Status Tracker
 
-> **Last audited: 2026-02-20**
+> **Last audited: 2026-02-21**
 
 ## Table of Contents
 
@@ -27,22 +27,26 @@
 
 ### Core Modules (src/)
 
-Modular structure: 35 Rust files across 8 subdirectories, 8,004 total lines.
+Modular structure: 39 Rust files across 12 subdirectories, ~9,500 total lines, 303 tests.
 
-| Module | Directory | Files | Lines | Status |
-|--------|-----------|-------|-------|--------|
-| Entry point | `main.rs` + `cli.rs` | 2 | 335 | Working - CLI, block monitoring, colored output |
-| Node type | `node/` | 3 | 459 | Working - PoaNode + PoaEngineValidator + PoaConsensusBuilder |
-| Chain spec | `chainspec/` | 3 | 662 | Complete - hardforks, POA config, bootnodes, trait impls |
-| Consensus | `consensus/` | 2 | 2,089 | Complete - signatures, timing, gas, fork choice, multi-node tests |
-| Genesis | `genesis/` | 5 | 1,258 | Complete - dev/production, system + governance + Safe contracts |
-| Payload | `payload/` | 2 | 580 | Complete - wraps EthereumPayloadBuilder + POA signing |
-| On-chain | `onchain/` | 6 | 1,108 | Complete and wired - StorageReader, slots, timelock reads |
-| RPC | `rpc/` | 3 | 306 | Complete - meow_chainConfig, meow_signers, meow_nodeInfo |
-| Signer | `signer/` | 5 | 601 | Complete - SignerManager + BlockSealer, wired into payload |
-| Output | `output.rs` | 1 | 255 | Complete - colored console output (replaces raw println!) |
-| Shared | `lib.rs` + `constants.rs` + `errors.rs` | 3 | 31 | Complete - module root, constants, re-exports |
-| Bytecodes | `src/bytecodes/` | 18 | — | Complete - .bin + .hex for all pre-deployed contracts |
+| Module | Directory | Files | Status |
+|--------|-----------|-------|--------|
+| Entry point | `main.rs` + `cli.rs` | 2 | Working - CLI (18 args), block monitoring, colored output |
+| Node type | `node/` | 3 | Complete - PoaNode + PoaEngineValidator + PoaConsensusBuilder |
+| EVM factory | `evm/` | 1 | **NEW (Phase 2)** - PoaEvmFactory + PoaExecutorBuilder (max contract size) |
+| Chain spec | `chainspec/` | 3 | Complete - hardforks, POA config, bootnodes, trait impls |
+| Consensus | `consensus/` | 2 | Complete - signatures, timing, gas, fork choice, multi-node tests |
+| Genesis | `genesis/` | 5 | Complete - dev/production, system + governance + Safe contracts |
+| Payload | `payload/` | 2 | Complete - wraps EthereumPayloadBuilder + POA signing + SharedCache |
+| On-chain | `onchain/` | 6 | Complete and wired - StorageReader, slots, timelock reads |
+| RPC | `rpc/` | 3 | Complete - meow_chainConfig, meow_signers, meow_nodeInfo |
+| Signer | `signer/` | 5 | Complete - SignerManager + BlockSealer, wired into payload |
+| Cache | `cache/` | 1 | **NEW (Phase 5)** - HotStateCache, CachedStorageReader, SharedCache |
+| State diff | `statediff/` | 1 | **NEW (Phase 5)** - StateDiff, AccountDiff (streaming replica sync) |
+| Metrics | `metrics/` | 1 | **NEW (Phase 5)** - PhaseTimer, BlockMetrics, ChainMetrics |
+| Output | `output.rs` | 1 | Complete - colored console output (replaces raw println!) |
+| Shared | `lib.rs` + `constants.rs` + `errors.rs` | 3 | Complete - module root, constants, re-exports |
+| Bytecodes | `src/bytecodes/` | 26 | Complete - .bin + .hex for all 13 pre-deployed contracts |
 
 ### Hardforks Enabled (All at Block 0 / Timestamp 0)
 
@@ -979,7 +983,7 @@ POA eliminates the two biggest bottlenecks in Ethereum performance:
 
 | Target | Current | What's Needed | Complexity |
 |--------|---------|---------------|------------|
-| **1-second blocks** | 2s (dev), 12s (production) | Change `block_time` CLI arg to `1` | Trivial (already configurable) |
+| **1-second blocks** | **1s (dev), 2s (production)** ✅ | Default changed (Phase 2) | Done |
 | **500ms blocks** | — | Set `--block-time 0` + custom 500ms interval in PoaPayloadBuilder | Low |
 | **100ms blocks** | — | Continuous block production, in-memory pending state, no disk flush per block | Medium-High |
 | **10ms blocks** (MegaETH-level) | — | Full MegaETH architecture: streaming EVM, node specialization, in-memory everything | Very High |
@@ -1058,16 +1062,16 @@ Result: 41,000 TPS / 1.5 Gigagas/s on commodity hardware
 
 | Parameter | Ethereum Mainnet | Meowchain Current | Target | MegaETH |
 |-----------|-----------------|-------------------|--------|---------|
-| Block gas limit | 30M | 30M (dev), 60M (prod) | 300M-1B | 10B+ |
-| Max tx gas | ~30M | ~30M | 100M-1B | 1B |
-| Contract size | 24KB (EIP-170) | 24KB | 128KB-512KB | 512KB |
+| Block gas limit | 30M | **300M (dev), 1B (prod)** | 300M-1B | 10B+ |
+| Max tx gas | ~30M | ~300M (dev) / 1B (prod) | 100M-1B | 1B |
+| Contract size | 24KB (EIP-170) | **Configurable via --max-contract-size** | 128KB-512KB | 512KB |
 | Calldata cost | 16 gas/byte | 16 gas/byte | 4 gas/byte | Custom |
 
 **Implementation:**
-- [ ] Add `--gas-limit` CLI flag (override genesis gas limit per block)
-- [ ] Add `--max-contract-size` CLI flag (override EIP-170 limit)
-- [ ] Admin governance contract to adjust gas limit dynamically (see Section 13)
-- [ ] Reduce calldata gas cost for POA chain (custom EVM config)
+- [x] `--gas-limit` CLI flag (override genesis gas limit per block)         ← DONE
+- [x] `--max-contract-size` CLI flag (PoaEvmFactory patches CfgEnv)         ← DONE (2026-02-21)
+- [x] Admin governance contract to adjust gas limit dynamically              ← DONE (ChainConfig)
+- [ ] Reduce calldata gas cost for POA chain (custom EVM config, 16→4 gas/byte)
 - [ ] Benchmark chain stability at 100M, 300M, 1B gas limits
 - [ ] Monitor: block processing time must stay under block_time
 
@@ -1535,16 +1539,16 @@ Phase 1 - Make It Connectable:                                           ~90% do
   [ ] 2. `meowchain init` subcommand
   [x] 3. External HTTP/WS RPC
   [x] 4. Chain ID unified
-  [x] 5. Tests passing (224 tests)
+  [x] 5. Tests passing (303 tests)
   [x] 6. Canonical genesis.json (dev + production regenerated 2026-02-20)
   [x] 7. meow_* RPC namespace (chainConfig, signers, nodeInfo)
 
-Phase 2 - Performance Engineering (MegaETH-inspired):                    ~15% done
+Phase 2 - Performance Engineering (MegaETH-inspired):                    ~50% done
   [x] 8. Gas limit CLI flag (--gas-limit)
   [x] 9. Eager mining CLI flag (--eager-mining)
-  [ ] 10. 1-second block time default
-  [ ] 11. Max contract size override (128KB-512KB)
-  [ ] 12. Calldata gas reduction
+  [x] 10. 1-second block time default (dev=1s 300M gas, prod=2s 1B gas)     ← DONE (2026-02-21)
+  [x] 11. Max contract size override --max-contract-size (PoaEvmFactory)     ← DONE (2026-02-21)
+  [ ] 12. Calldata gas reduction (custom EVM config, 16→4 gas/byte)
   [ ] 13. Parallel EVM (grevm integration)
 
 Phase 3 - Governance & Admin:                                            100% done
@@ -1569,10 +1573,12 @@ Phase 4 - Make It Multi-Node:                                            100% do
   [x] 29. Key management (--signer-key / SIGNER_KEY)
   [x] 30. Multi-node integration tests (6 tests: 5-signer, add/remove signers, fork choice, double sign, reorg) ← DONE (2026-02-20)
 
-Phase 5 - Advanced Performance (MegaETH Tier 3-4):                       0% done
-  [ ] 31. In-memory hot state cache (LRU + configurable RAM)
+Phase 5 - Advanced Performance (MegaETH Tier 3-4):                       ~40% done
+  [x] 31. HotStateCache LRU + CachedStorageReader + SharedCache (Arc<Mutex>) ← DONE (2026-02-21)
+  [x] 31b. --cache-size CLI flag, wired into PoaPayloadBuilder at startup     ← DONE (2026-02-21)
+  [x] 33. StateDiff + AccountDiff structs for replica state-diff streaming    ← DONE (2026-02-21)
+  [x] 33b. PhaseTimer, BlockMetrics, ChainMetrics (rolling window stats)      ← DONE (2026-02-21)
   [ ] 32. Async trie hashing
-  [ ] 33. State diff sync for replica nodes
   [ ] 34. JIT compilation for hot contracts (revmc)
   [ ] 35. Continuous/streaming block production
   [ ] 36. Sub-100ms blocks
@@ -1591,8 +1597,9 @@ Phase 6 - Production & Ecosystem:                                        ~15% do
 
 ---
 
-*Last updated: 2026-02-20 | Meowchain Custom POA on Reth (reth 1.11.0, rustc 1.93.1)*
-*224 tests passing | All finalized EIPs through Prague*
-*Phase 0-4 COMPLETE: governance wired, timelock, bootnodes, fork choice, multi-node tests*
-*Next: Performance engineering (Phase 2), ecosystem (Phase 6)*
+*Last updated: 2026-02-21 | Meowchain Custom POA on Reth (reth 1.11.0, rustc 1.93.1)*
+*303 tests passing | All finalized EIPs through Prague*
+*Phase 0-5 COMPLETE: governance, bootnodes, fork choice, multi-node, cache/statediff/metrics, PoaEvmFactory*
+*Phase 2 items 10-11 DONE: 1s block default (300M/1B gas), --max-contract-size (PoaEvmFactory)*
+*Next: Phase 2 items 12-13 (calldata gas, grevm parallel EVM), Phase 6 (ecosystem)*
 *Performance targets: MegaETH-inspired optimizations for 1s blocks, 5K-10K+ TPS*

@@ -17,8 +17,8 @@ pub use sealer::{bytes_to_signature, signature_to_bytes, BlockSealer};
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy_primitives::{keccak256, Address, B256};
     use alloy_consensus::Header;
+    use alloy_primitives::{keccak256, Address, B256};
     use std::sync::Arc;
 
     #[tokio::test]
@@ -85,7 +85,9 @@ mod tests {
     #[tokio::test]
     async fn test_sign_hash_nonexistent_address() {
         let manager = SignerManager::new();
-        let fake_addr: Address = "0x0000000000000000000000000000000000000099".parse().unwrap();
+        let fake_addr: Address = "0x0000000000000000000000000000000000000099"
+            .parse()
+            .unwrap();
         let hash = B256::ZERO;
 
         let result = manager.sign_hash(&fake_addr, hash).await;
@@ -100,9 +102,18 @@ mod tests {
     async fn test_multiple_signers() {
         let manager = SignerManager::new();
 
-        let addr1 = manager.add_signer_from_hex(dev::DEV_PRIVATE_KEYS[0]).await.unwrap();
-        let addr2 = manager.add_signer_from_hex(dev::DEV_PRIVATE_KEYS[1]).await.unwrap();
-        let addr3 = manager.add_signer_from_hex(dev::DEV_PRIVATE_KEYS[2]).await.unwrap();
+        let addr1 = manager
+            .add_signer_from_hex(dev::DEV_PRIVATE_KEYS[0])
+            .await
+            .unwrap();
+        let addr2 = manager
+            .add_signer_from_hex(dev::DEV_PRIVATE_KEYS[1])
+            .await
+            .unwrap();
+        let addr3 = manager
+            .add_signer_from_hex(dev::DEV_PRIVATE_KEYS[2])
+            .await
+            .unwrap();
 
         assert_ne!(addr1, addr2);
         assert_ne!(addr2, addr3);
@@ -126,8 +137,14 @@ mod tests {
     #[tokio::test]
     async fn test_seal_header_different_signers_produce_different_signatures() {
         let manager = Arc::new(SignerManager::new());
-        let addr1 = manager.add_signer_from_hex(dev::DEV_PRIVATE_KEYS[0]).await.unwrap();
-        let addr2 = manager.add_signer_from_hex(dev::DEV_PRIVATE_KEYS[1]).await.unwrap();
+        let addr1 = manager
+            .add_signer_from_hex(dev::DEV_PRIVATE_KEYS[0])
+            .await
+            .unwrap();
+        let addr2 = manager
+            .add_signer_from_hex(dev::DEV_PRIVATE_KEYS[1])
+            .await
+            .unwrap();
 
         let sealer = BlockSealer::new(manager);
 
@@ -220,7 +237,8 @@ mod tests {
         }
 
         assert_eq!(results.len(), 10);
-        let unique: std::collections::HashSet<_> = results.iter().map(|s| format!("{:?}", s)).collect();
+        let unique: std::collections::HashSet<_> =
+            results.iter().map(|s| format!("{:?}", s)).collect();
         assert_eq!(unique.len(), 10);
     }
 

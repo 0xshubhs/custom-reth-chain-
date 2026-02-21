@@ -1,8 +1,10 @@
-use alloy_primitives::{Address, B256, U256};
-use crate::genesis::{CHAIN_CONFIG_ADDRESS, SIGNER_REGISTRY_ADDRESS, TIMELOCK_ADDRESS};
-use super::helpers::{decode_address, decode_bool, decode_u64, dynamic_array_base_slot, mapping_address_bool_slot};
+use super::helpers::{
+    decode_address, decode_bool, decode_u64, dynamic_array_base_slot, mapping_address_bool_slot,
+};
 use super::slots::{chain_config_slots, signer_registry_slots, timelock_slots};
 use super::StorageReader;
+use crate::genesis::{CHAIN_CONFIG_ADDRESS, SIGNER_REGISTRY_ADDRESS, TIMELOCK_ADDRESS};
+use alloy_primitives::{Address, B256, U256};
 
 /// Dynamic chain configuration read from the on-chain ChainConfig contract.
 ///
@@ -72,14 +74,14 @@ pub fn read_chain_config(reader: &impl StorageReader) -> Option<DynamicChainConf
 pub fn read_gas_limit(reader: &impl StorageReader) -> Option<u64> {
     reader
         .read_storage(CHAIN_CONFIG_ADDRESS, chain_config_slots::GAS_LIMIT)
-        .map(|v| decode_u64(v))
+        .map(decode_u64)
 }
 
 /// Read just the block time from ChainConfig.
 pub fn read_block_time(reader: &impl StorageReader) -> Option<u64> {
     reader
         .read_storage(CHAIN_CONFIG_ADDRESS, chain_config_slots::BLOCK_TIME)
-        .map(|v| decode_u64(v))
+        .map(decode_u64)
 }
 
 /// Read the full signer list from SignerRegistry storage.
@@ -117,7 +119,7 @@ pub fn is_signer_on_chain(reader: &impl StorageReader, address: Address) -> bool
     let slot = U256::from_be_bytes(slot_hash.0);
     reader
         .read_storage(SIGNER_REGISTRY_ADDRESS, slot)
-        .map(|val| decode_bool(val))
+        .map(decode_bool)
         .unwrap_or(false)
 }
 
@@ -125,20 +127,20 @@ pub fn is_signer_on_chain(reader: &impl StorageReader, address: Address) -> bool
 pub fn read_timelock_delay(reader: &impl StorageReader) -> Option<u64> {
     reader
         .read_storage(TIMELOCK_ADDRESS, timelock_slots::MIN_DELAY)
-        .map(|v| decode_u64(v))
+        .map(decode_u64)
 }
 
 /// Read the proposer address from the Timelock contract.
 pub fn read_timelock_proposer(reader: &impl StorageReader) -> Option<Address> {
     reader
         .read_storage(TIMELOCK_ADDRESS, timelock_slots::PROPOSER)
-        .map(|v| decode_address(v))
+        .map(decode_address)
 }
 
 /// Check if the Timelock is paused.
 pub fn is_timelock_paused(reader: &impl StorageReader) -> bool {
     reader
         .read_storage(TIMELOCK_ADDRESS, timelock_slots::PAUSED)
-        .map(|v| decode_bool(v))
+        .map(decode_bool)
         .unwrap_or(false)
 }

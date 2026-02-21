@@ -30,8 +30,7 @@ pub const TIMELOCK_ADDRESS: Address = address!("00000000000000000000000000000000
 pub const GOVERNANCE_SAFE_ADDRESS: Address = address!("000000000000000000000000000000006F5AFE00");
 
 /// Gnosis Safe Singleton v1.3.0 canonical address
-pub const SAFE_SINGLETON_ADDRESS: Address =
-    address!("d9Db270c1B5E3Bd161E8c8503c55cEABeE709552");
+pub const SAFE_SINGLETON_ADDRESS: Address = address!("d9Db270c1B5E3Bd161E8c8503c55cEABeE709552");
 
 /// Gnosis Safe Proxy Factory canonical address
 pub const SAFE_PROXY_FACTORY_ADDRESS: Address =
@@ -42,5 +41,4 @@ pub const SAFE_FALLBACK_HANDLER_ADDRESS: Address =
     address!("f48f2B2d2a534e402487b3ee7C18c33Aec0Fe5e4");
 
 /// Gnosis Safe MultiSend canonical address
-pub const SAFE_MULTISEND_ADDRESS: Address =
-    address!("A238CBeb142c10Ef7Ad8442C6D1f9E89e07e7761");
+pub const SAFE_MULTISEND_ADDRESS: Address = address!("A238CBeb142c10Ef7Ad8442C6D1f9E89e07e7761");

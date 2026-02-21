@@ -30,7 +30,11 @@ impl MeowRpc {
         signer_manager: Arc<SignerManager>,
         dev_mode: bool,
     ) -> Self {
-        Self { chain_spec, signer_manager, dev_mode }
+        Self {
+            chain_spec,
+            signer_manager,
+            dev_mode,
+        }
     }
 }
 
@@ -162,8 +166,8 @@ mod tests {
 
         let config = rpc.chain_config().await.unwrap();
         assert_eq!(config.chain_id, 9323310);
-        assert_eq!(config.gas_limit, 60_000_000);
-        assert_eq!(config.block_time, 12);
+        assert_eq!(config.gas_limit, 1_000_000_000); // Phase 2: 1B production gas limit
+        assert_eq!(config.block_time, 12); // period from PoaConfig (not genesis block_period)
         assert_eq!(config.signer_count, 5);
         assert_eq!(config.epoch, 30000);
     }

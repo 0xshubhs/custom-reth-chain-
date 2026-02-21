@@ -6,7 +6,7 @@ Custom POA blockchain on Reth. Chain ID **9323310**, all hardforks through Pragu
 
 ```
 custom-reth-chain-/
-├── src/                            # Rust source code (8,004 lines, 35 files, 224 tests)
+├── src/                            # Rust source code (~9,500 lines, 39 files, 303 tests)
 │   ├── main.rs                     # Entry point, block monitoring
 │   ├── lib.rs                      # Library root (module declarations)
 │   ├── cli.rs                      # Cli struct (clap args)
@@ -50,7 +50,15 @@ custom-reth-chain-/
 │   │   ├── sealer.rs               # BlockSealer + signature helpers
 │   │   ├── dev.rs                  # DEV_PRIVATE_KEYS, setup_dev_signers()
 │   │   └── errors.rs               # SignerError enum
-│   └── bytecodes/                  # Pre-compiled contract bytecodes (18 .bin/.hex)
+│   ├── evm/
+│   │   └── mod.rs                  # PoaEvmFactory + PoaExecutorBuilder (Phase 2: max contract size)
+│   ├── cache/
+│   │   └── mod.rs                  # HotStateCache, CachedStorageReader, SharedCache (Phase 5)
+│   ├── statediff/
+│   │   └── mod.rs                  # StateDiff, AccountDiff (Phase 5: replica sync)
+│   ├── metrics/
+│   │   └── mod.rs                  # PhaseTimer, BlockMetrics, ChainMetrics (Phase 5)
+│   └── bytecodes/                  # Pre-compiled contract bytecodes (26 .bin/.hex)
 ├── genesis/                        # Genesis JSON files
 │   ├── sample-genesis.json         # Dev genesis (chain ID 9323310, 38 alloc entries)
 │   └── production-genesis.json     # Production genesis (26 alloc entries)
@@ -84,10 +92,10 @@ just build
 # Quick build without updating deps
 just build-fast
 
-# Run in dev mode (auto-mines every 2s, 3 signers, 20 prefunded accounts)
+# Run in dev mode (auto-mines every 1s, 3 signers, 20 prefunded accounts)
 just dev
 
-# Run tests (224 passing)
+# Run tests (303 passing)
 just test           # with cargo update
 just test-fast      # without cargo update
 ```
@@ -98,31 +106,34 @@ just test-fast      # without cargo update
 meowchain [OPTIONS]
 
 Options:
-  --chain-id <ID>           Chain ID [default: 9323310]
-  --block-time <SECONDS>    Block interval in seconds [default: 2]
-  --datadir <PATH>          Database directory [default: data]
-  --http-addr <ADDR>        HTTP RPC bind address [default: 0.0.0.0]
-  --http-port <PORT>        HTTP RPC port [default: 8545]
-  --ws-addr <ADDR>          WebSocket RPC bind address [default: 0.0.0.0]
-  --ws-port <PORT>          WebSocket RPC port [default: 8546]
-  --signer-key <HEX>        Private key for block signing (64 hex chars, no 0x)
-                             Also accepts SIGNER_KEY env var
-  --production              Production mode: 5 signers, 60M gas, strict POA
-  --no-dev                  Disable dev mode (no auto-mining)
-  --mining                  Force auto-mining in production mode (for testing)
-  --gas-limit <N>           Override block gas limit (e.g., 100000000 for 100M)
-  --eager-mining            Mine immediately on tx arrival instead of interval
-  --port <PORT>             P2P listener port [default: 30303]
-  --bootnodes <URLs>        Comma-separated enode URLs for peer discovery
-  --disable-discovery       Disable P2P peer discovery
-  -h, --help                Print help
+  --chain-id <ID>             Chain ID [default: 9323310]
+  --block-time <SECONDS>      Block interval in seconds [default: 1]
+  --datadir <PATH>            Database directory [default: data]
+  --http-addr <ADDR>          HTTP RPC bind address [default: 0.0.0.0]
+  --http-port <PORT>          HTTP RPC port [default: 8545]
+  --ws-addr <ADDR>            WebSocket RPC bind address [default: 0.0.0.0]
+  --ws-port <PORT>            WebSocket RPC port [default: 8546]
+  --signer-key <HEX>          Private key for block signing (64 hex chars, no 0x)
+                               Also accepts SIGNER_KEY env var
+  --production                Production mode: 5 signers, 1B gas, strict POA
+  --no-dev                    Disable dev mode (no auto-mining)
+  --mining                    Force auto-mining in production mode (for testing)
+  --gas-limit <N>             Override block gas limit (e.g., 300000000 for 300M)
+  --max-contract-size <BYTES> Override EIP-170 24KB contract size limit (e.g., 524288 for 512KB)
+  --cache-size <N>            Hot state cache entries [default: 1000]
+  --eager-mining              Mine immediately on tx arrival instead of interval
+  --port <PORT>               P2P listener port [default: 30303]
+  --bootnodes <URLs>          Comma-separated enode URLs for peer discovery
+  --disable-discovery         Disable P2P peer discovery
+  --metrics-interval <N>      Print metrics every N blocks (0=off)
+  -h, --help                  Print help
 ```
 
 ## Running Modes
 
 ### Dev Mode (default)
 
-Auto-mines blocks every 2 seconds. Relaxed consensus (no signature verification). 20 prefunded accounts with 10,000 ETH each. 3 default signers loaded automatically.
+Auto-mines blocks every 1 second. Relaxed consensus (no signature verification). 20 prefunded accounts with 10,000 ETH each. 3 default signers loaded automatically. 300M gas limit.
 
 ```bash
 # Standard dev mode

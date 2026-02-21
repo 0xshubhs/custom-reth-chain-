@@ -3,8 +3,8 @@ use alloy_primitives::{address, b256, bytes, Address, Bytes, B256, U256};
 use std::collections::BTreeMap;
 
 use super::addresses::{
-    EIP1967_ADMIN_SLOT, MINER_PROXY_ADDRESS, SAFE_FALLBACK_HANDLER_ADDRESS,
-    SAFE_MULTISEND_ADDRESS, SAFE_PROXY_FACTORY_ADDRESS, SAFE_SINGLETON_ADDRESS,
+    EIP1967_ADMIN_SLOT, MINER_PROXY_ADDRESS, SAFE_FALLBACK_HANDLER_ADDRESS, SAFE_MULTISEND_ADDRESS,
+    SAFE_PROXY_FACTORY_ADDRESS, SAFE_SINGLETON_ADDRESS,
 };
 
 /// Returns system contracts required by Cancun and Prague hardforks.
@@ -19,7 +19,7 @@ pub(crate) fn system_contract_alloc() -> BTreeMap<Address, GenesisAccount> {
         GenesisAccount {
             balance: U256::ZERO,
             nonce: Some(1),
-            code: Some(bytes!("3373fffffffffffffffffffffffffffffffffffffffe14604d57602036146024575f5ffd5b5f35801560495762001fff810690815414603c575f5ffd5b62001fff01545f5260205ff35b5f5ffd5b62001fff42064281555f359062001fff015500").into()),
+            code: Some(bytes!("3373fffffffffffffffffffffffffffffffffffffffe14604d57602036146024575f5ffd5b5f35801560495762001fff810690815414603c575f5ffd5b62001fff01545f5260205ff35b5f5ffd5b62001fff42064281555f359062001fff015500")),
             storage: None,
             private_key: None,
         },
@@ -32,7 +32,7 @@ pub(crate) fn system_contract_alloc() -> BTreeMap<Address, GenesisAccount> {
         GenesisAccount {
             balance: U256::ZERO,
             nonce: Some(1),
-            code: Some(bytes!("3373fffffffffffffffffffffffffffffffffffffffe14604657602036036042575f35600143038111604257611fff81430311604257611fff9006545f5260205ff35b5f5ffd5b5f35611fff60014303065500").into()),
+            code: Some(bytes!("3373fffffffffffffffffffffffffffffffffffffffe14604657602036036042575f35600143038111604257611fff81430311604257611fff9006545f5260205ff35b5f5ffd5b5f35611fff60014303065500")),
             storage: None,
             private_key: None,
         },
@@ -45,7 +45,7 @@ pub(crate) fn system_contract_alloc() -> BTreeMap<Address, GenesisAccount> {
         GenesisAccount {
             balance: U256::ZERO,
             nonce: Some(1),
-            code: Some(bytes!("3373fffffffffffffffffffffffffffffffffffffffe1460cb5760115f54807fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff146101f457600182026001905f5b5f82111560685781019083028483029004916001019190604d565b909390049250505036603814608857366101f457346101f4575f5260205ff35b34106101f457600154600101600155600354806003026004013381556001015f35815560010160203590553360601b5f5260385f601437604c5fa0600101600355005b6003546002548082038060101160df575060105b5f5b8181146101835782810160030260040181604c02815460601b8152601401816001015481526020019060020154807fffffffffffffffffffffffffffffffff00000000000000000000000000000000168252906010019060401c908160381c81600701538160301c81600601538160281c81600501538160201c81600401538160181c81600301538160101c81600201538160081c81600101535360010160e1565b910180921461019557906002556101a0565b90505f6002555f6003555b5f54807fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff14156101cd57505f5b6001546002828201116101e25750505f6101e8565b01600290035b5f555f600155604c025ff35b5f5ffd").into()),
+            code: Some(bytes!("3373fffffffffffffffffffffffffffffffffffffffe1460cb5760115f54807fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff146101f457600182026001905f5b5f82111560685781019083028483029004916001019190604d565b909390049250505036603814608857366101f457346101f4575f5260205ff35b34106101f457600154600101600155600354806003026004013381556001015f35815560010160203590553360601b5f5260385f601437604c5fa0600101600355005b6003546002548082038060101160df575060105b5f5b8181146101835782810160030260040181604c02815460601b8152601401816001015481526020019060020154807fffffffffffffffffffffffffffffffff00000000000000000000000000000000168252906010019060401c908160381c81600701538160301c81600601538160281c81600501538160201c81600401538160181c81600301538160101c81600201538160081c81600101535360010160e1565b910180921461019557906002556101a0565b90505f6002555f6003555b5f54807fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff14156101cd57505f5b6001546002828201116101e25750505f6101e8565b01600290035b5f555f600155604c025ff35b5f5ffd")),
             storage: None,
             private_key: None,
         },
@@ -58,7 +58,7 @@ pub(crate) fn system_contract_alloc() -> BTreeMap<Address, GenesisAccount> {
         GenesisAccount {
             balance: U256::ZERO,
             nonce: Some(1),
-            code: Some(bytes!("3373fffffffffffffffffffffffffffffffffffffffe1460d35760115f54807fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff1461019a57600182026001905f5b5f82111560685781019083028483029004916001019190604d565b9093900492505050366060146088573661019a573461019a575f5260205ff35b341061019a57600154600101600155600354806004026004013381556001015f358155600101602035815560010160403590553360601b5f5260605f60143760745fa0600101600355005b6003546002548082038060021160e7575060025b5f5b8181146101295782810160040260040181607402815460601b815260140181600101548152602001816002015481526020019060030154905260010160e9565b910180921461013b5790600255610146565b90505f6002555f6003555b5f54807fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff141561017357505f5b6001546001828201116101885750505f61018e565b01600190035b5f555f6001556074025ff35b5f5ffd0000").into()),
+            code: Some(bytes!("3373fffffffffffffffffffffffffffffffffffffffe1460d35760115f54807fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff1461019a57600182026001905f5b5f82111560685781019083028483029004916001019190604d565b9093900492505050366060146088573661019a573461019a575f5260205ff35b341061019a57600154600101600155600354806004026004013381556001015f358155600101602035815560010160403590553360601b5f5260605f60143760745fa0600101600355005b6003546002548082038060021160e7575060025b5f5b8181146101295782810160040260040181607402815460601b815260140181600101548152602001816002015481526020019060030154905260010160e9565b910180921461013b5790600255610146565b90505f6002555f6003555b5f54807fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff141561017357505f5b6001546001828201116101885750505f61018e565b01600190035b5f555f6001556074025ff35b5f5ffd0000")),
             storage: None,
             private_key: None,
         },
@@ -126,7 +126,7 @@ pub(crate) fn miner_proxy_alloc(admin: Address) -> BTreeMap<Address, GenesisAcco
         GenesisAccount {
             balance: U256::ZERO,
             nonce: Some(1),
-            code: Some(proxy_bytecode.into()),
+            code: Some(proxy_bytecode),
             storage: Some(storage),
             private_key: None,
         },
@@ -146,7 +146,9 @@ pub(crate) fn erc4337_contract_alloc() -> BTreeMap<Address, GenesisAccount> {
         GenesisAccount {
             balance: U256::ZERO,
             nonce: Some(1),
-            code: Some(Bytes::from_static(include_bytes!("../bytecodes/entrypoint_v07.bin"))),
+            code: Some(Bytes::from_static(include_bytes!(
+                "../bytecodes/entrypoint_v07.bin"
+            ))),
             storage: None,
             private_key: None,
         },
@@ -186,7 +188,9 @@ pub(crate) fn erc4337_contract_alloc() -> BTreeMap<Address, GenesisAccount> {
         GenesisAccount {
             balance: U256::ZERO,
             nonce: Some(1),
-            code: Some(Bytes::from_static(include_bytes!("../bytecodes/multicall3.bin"))),
+            code: Some(Bytes::from_static(include_bytes!(
+                "../bytecodes/multicall3.bin"
+            ))),
             storage: None,
             private_key: None,
         },
@@ -198,7 +202,9 @@ pub(crate) fn erc4337_contract_alloc() -> BTreeMap<Address, GenesisAccount> {
         GenesisAccount {
             balance: U256::ZERO,
             nonce: Some(1),
-            code: Some(Bytes::from_static(include_bytes!("../bytecodes/create2_deployer.bin"))),
+            code: Some(Bytes::from_static(include_bytes!(
+                "../bytecodes/create2_deployer.bin"
+            ))),
             storage: None,
             private_key: None,
         },
@@ -210,7 +216,9 @@ pub(crate) fn erc4337_contract_alloc() -> BTreeMap<Address, GenesisAccount> {
         GenesisAccount {
             balance: U256::ZERO,
             nonce: Some(1),
-            code: Some(Bytes::from_static(include_bytes!("../bytecodes/simple_account_factory.bin"))),
+            code: Some(Bytes::from_static(include_bytes!(
+                "../bytecodes/simple_account_factory.bin"
+            ))),
             storage: None,
             private_key: None,
         },
@@ -230,7 +238,9 @@ pub(crate) fn safe_contract_alloc() -> BTreeMap<Address, GenesisAccount> {
         GenesisAccount {
             balance: U256::ZERO,
             nonce: Some(1),
-            code: Some(Bytes::from_static(include_bytes!("../bytecodes/safe_singleton.bin"))),
+            code: Some(Bytes::from_static(include_bytes!(
+                "../bytecodes/safe_singleton.bin"
+            ))),
             storage: None,
             private_key: None,
         },
@@ -242,7 +252,9 @@ pub(crate) fn safe_contract_alloc() -> BTreeMap<Address, GenesisAccount> {
         GenesisAccount {
             balance: U256::ZERO,
             nonce: Some(1),
-            code: Some(Bytes::from_static(include_bytes!("../bytecodes/safe_proxy_factory.bin"))),
+            code: Some(Bytes::from_static(include_bytes!(
+                "../bytecodes/safe_proxy_factory.bin"
+            ))),
             storage: None,
             private_key: None,
         },
@@ -254,7 +266,9 @@ pub(crate) fn safe_contract_alloc() -> BTreeMap<Address, GenesisAccount> {
         GenesisAccount {
             balance: U256::ZERO,
             nonce: Some(1),
-            code: Some(Bytes::from_static(include_bytes!("../bytecodes/safe_fallback_handler.bin"))),
+            code: Some(Bytes::from_static(include_bytes!(
+                "../bytecodes/safe_fallback_handler.bin"
+            ))),
             storage: None,
             private_key: None,
         },
@@ -266,7 +280,9 @@ pub(crate) fn safe_contract_alloc() -> BTreeMap<Address, GenesisAccount> {
         GenesisAccount {
             balance: U256::ZERO,
             nonce: Some(1),
-            code: Some(Bytes::from_static(include_bytes!("../bytecodes/safe_multisend.bin"))),
+            code: Some(Bytes::from_static(include_bytes!(
+                "../bytecodes/safe_multisend.bin"
+            ))),
             storage: None,
             private_key: None,
         },

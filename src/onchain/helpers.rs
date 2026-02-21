@@ -21,7 +21,7 @@ pub fn mapping_address_bool_slot(key: Address, mapping_slot: U256) -> B256 {
     let mut hasher = Keccak256::new();
     let mut key_padded = [0u8; 32];
     key_padded[12..32].copy_from_slice(key.as_slice());
-    hasher.update(&key_padded);
+    hasher.update(key_padded);
     hasher.update(B256::from(mapping_slot.to_be_bytes()).as_slice());
     hasher.finalize()
 }

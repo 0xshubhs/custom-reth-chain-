@@ -13,8 +13,8 @@ use alloy_eips::eip7840::BlobParams;
 use alloy_genesis::Genesis;
 use alloy_primitives::{Address, B256, U256};
 use reth_chainspec::{
-    BaseFeeParams, BaseFeeParamsKind, Chain, ChainSpec, DepositContract,
-    EthChainSpec, EthereumHardforks, ForkCondition, ForkFilter, ForkId, Hardfork, Hardforks, Head,
+    BaseFeeParams, BaseFeeParamsKind, Chain, ChainSpec, DepositContract, EthChainSpec,
+    EthereumHardforks, ForkCondition, ForkFilter, ForkId, Hardfork, Hardforks, Head,
 };
 use reth_ethereum_forks::EthereumHardfork;
 use reth_network_peers::NodeRecord;
@@ -69,7 +69,7 @@ impl PoaChainSpec {
     pub fn dev_chain() -> Self {
         let genesis = crate::genesis::create_dev_genesis();
         let poa_config = PoaConfig {
-            period: 2, // Fast 2-second blocks for dev
+            period: 1, // 1-second blocks for dev (Phase 2)
             epoch: 30000,
             signers: crate::genesis::dev_signers(),
         };
@@ -116,7 +116,11 @@ impl PoaChainSpec {
 
     /// Whether the live signer cache has been populated from on-chain data.
     pub fn has_live_signers(&self) -> bool {
-        self.live_signers.read().ok().and_then(|g| g.as_ref().map(|_| ())).is_some()
+        self.live_signers
+            .read()
+            .ok()
+            .and_then(|g| g.as_ref().map(|_| ()))
+            .is_some()
     }
 
     /// Returns the block period in seconds
@@ -244,7 +248,7 @@ mod tests {
     fn test_dev_chain_creation() {
         let chain = PoaChainSpec::dev_chain();
         assert!(!chain.signers().is_empty());
-        assert_eq!(chain.block_period(), 2);
+        assert_eq!(chain.block_period(), 1); // Phase 2: 1s blocks
     }
 
     #[test]
@@ -273,11 +277,15 @@ mod tests {
         assert!(chain.fork(EthereumHardfork::Frontier).active_at_block(0));
         assert!(chain.fork(EthereumHardfork::Homestead).active_at_block(0));
         assert!(chain.fork(EthereumHardfork::Byzantium).active_at_block(0));
-        assert!(chain.fork(EthereumHardfork::Constantinople).active_at_block(0));
+        assert!(chain
+            .fork(EthereumHardfork::Constantinople)
+            .active_at_block(0));
         assert!(chain.fork(EthereumHardfork::Istanbul).active_at_block(0));
         assert!(chain.fork(EthereumHardfork::Berlin).active_at_block(0));
         assert!(chain.fork(EthereumHardfork::London).active_at_block(0));
-        assert!(chain.fork(EthereumHardfork::Shanghai).active_at_timestamp(0));
+        assert!(chain
+            .fork(EthereumHardfork::Shanghai)
+            .active_at_timestamp(0));
         assert!(chain.fork(EthereumHardfork::Cancun).active_at_timestamp(0));
         assert!(chain.fork(EthereumHardfork::Prague).active_at_timestamp(0));
     }
@@ -291,7 +299,9 @@ mod tests {
         assert!(chain.is_authorized_signer(&signers[0]));
 
         // Random address should NOT be authorized
-        let fake: Address = "0x0000000000000000000000000000000000000099".parse().unwrap();
+        let fake: Address = "0x0000000000000000000000000000000000000099"
+            .parse()
+            .unwrap();
         assert!(!chain.is_authorized_signer(&fake));
     }
 
@@ -302,9 +312,15 @@ mod tests {
             period: 2,
             epoch: 30000,
             signers: vec![
-                "0x0000000000000000000000000000000000000001".parse().unwrap(),
-                "0x0000000000000000000000000000000000000002".parse().unwrap(),
-                "0x0000000000000000000000000000000000000003".parse().unwrap(),
+                "0x0000000000000000000000000000000000000001"
+                    .parse()
+                    .unwrap(),
+                "0x0000000000000000000000000000000000000002"
+                    .parse()
+                    .unwrap(),
+                "0x0000000000000000000000000000000000000003"
+                    .parse()
+                    .unwrap(),
             ],
         };
         let chain = PoaChainSpec::new(genesis, poa_config);
@@ -312,19 +328,35 @@ mod tests {
         // Test round-robin assignment
         assert_eq!(
             chain.expected_signer(0),
-            Some("0x0000000000000000000000000000000000000001".parse().unwrap())
+            Some(
+                "0x0000000000000000000000000000000000000001"
+                    .parse()
+                    .unwrap()
+            )
         );
         assert_eq!(
             chain.expected_signer(1),
-            Some("0x0000000000000000000000000000000000000002".parse().unwrap())
+            Some(
+                "0x0000000000000000000000000000000000000002"
+                    .parse()
+                    .unwrap()
+            )
         );
         assert_eq!(
             chain.expected_signer(2),
-            Some("0x0000000000000000000000000000000000000003".parse().unwrap())
+            Some(
+                "0x0000000000000000000000000000000000000003"
+                    .parse()
+                    .unwrap()
+            )
         );
         assert_eq!(
             chain.expected_signer(3),
-            Some("0x0000000000000000000000000000000000000001".parse().unwrap())
+            Some(
+                "0x0000000000000000000000000000000000000001"
+                    .parse()
+                    .unwrap()
+            )
         );
     }
 
@@ -370,7 +402,10 @@ mod tests {
     fn test_paris_total_difficulty() {
         let chain = PoaChainSpec::dev_chain();
         // POA starts post-merge with TTD=0
-        assert_eq!(chain.inner().paris_block_and_final_difficulty, Some((0, U256::ZERO)));
+        assert_eq!(
+            chain.inner().paris_block_and_final_difficulty,
+            Some((0, U256::ZERO))
+        );
     }
 
     #[test]
@@ -392,7 +427,11 @@ mod tests {
     #[test]
     fn test_fork_id_and_filter() {
         let chain = PoaChainSpec::dev_chain();
-        let head = Head { number: 0, timestamp: 0, ..Default::default() };
+        let head = Head {
+            number: 0,
+            timestamp: 0,
+            ..Default::default()
+        };
 
         // Should not panic
         let _fork_id = chain.fork_id(&head);
@@ -403,23 +442,26 @@ mod tests {
     #[test]
     fn test_dev_vs_production_config_comparison() {
         // Verify the CLAUDE.md configuration table
+        // Phase 2: dev defaults updated to 1s blocks, 300M gas
         let dev_chain = PoaChainSpec::dev_chain();
         assert_eq!(dev_chain.inner().chain.id(), 9323310);
-        assert_eq!(dev_chain.block_period(), 2);
-        assert_eq!(dev_chain.inner().genesis().gas_limit, 30_000_000);
+        assert_eq!(dev_chain.block_period(), 1);
+        assert_eq!(dev_chain.inner().genesis().gas_limit, 300_000_000);
         assert_eq!(dev_chain.signers().len(), 3);
         assert_eq!(dev_chain.epoch(), 30000);
 
-        let prod_genesis = crate::genesis::create_genesis(crate::genesis::GenesisConfig::production());
+        // Phase 2: production defaults updated to 1B gas
+        let prod_genesis =
+            crate::genesis::create_genesis(crate::genesis::GenesisConfig::production());
         let prod_config = PoaConfig {
-            period: 12,
+            period: 2,
             epoch: 30000,
             signers: crate::genesis::dev_accounts().into_iter().take(5).collect(),
         };
         let prod_chain = PoaChainSpec::new(prod_genesis, prod_config);
         assert_eq!(prod_chain.inner().chain.id(), 9323310);
-        assert_eq!(prod_chain.block_period(), 12);
-        assert_eq!(prod_chain.inner().genesis().gas_limit, 60_000_000);
+        assert_eq!(prod_chain.block_period(), 2);
+        assert_eq!(prod_chain.inner().genesis().gas_limit, 1_000_000_000);
         assert_eq!(prod_chain.signers().len(), 5);
         assert_eq!(prod_chain.epoch(), 30000);
     }
@@ -440,7 +482,9 @@ mod tests {
     #[test]
     fn test_single_signer_chain() {
         let genesis = crate::genesis::create_dev_genesis();
-        let signer: Address = "0x0000000000000000000000000000000000000042".parse().unwrap();
+        let signer: Address = "0x0000000000000000000000000000000000000042"
+            .parse()
+            .unwrap();
         let poa_config = PoaConfig {
             period: 2,
             epoch: 30000,
@@ -490,7 +534,9 @@ mod tests {
         let poa_config = PoaConfig {
             period: 5,
             epoch: 100,
-            signers: vec!["0x0000000000000000000000000000000000000001".parse().unwrap()],
+            signers: vec!["0x0000000000000000000000000000000000000001"
+                .parse()
+                .unwrap()],
         };
         let chain = PoaChainSpec::new(genesis, poa_config);
 
@@ -512,8 +558,12 @@ mod tests {
     fn test_update_live_signers_overrides_genesis() {
         let chain = PoaChainSpec::dev_chain();
         let new_signers: Vec<Address> = vec![
-            "0x0000000000000000000000000000000000000042".parse().unwrap(),
-            "0x0000000000000000000000000000000000000043".parse().unwrap(),
+            "0x0000000000000000000000000000000000000042"
+                .parse()
+                .unwrap(),
+            "0x0000000000000000000000000000000000000043"
+                .parse()
+                .unwrap(),
         ];
         chain.update_live_signers(new_signers.clone());
         assert!(chain.has_live_signers());
@@ -525,9 +575,9 @@ mod tests {
         let chain = PoaChainSpec::dev_chain();
         let original = chain.expected_signer(0).unwrap();
 
-        let new_signers: Vec<Address> = vec![
-            "0x0000000000000000000000000000000000000099".parse().unwrap(),
-        ];
+        let new_signers: Vec<Address> = vec!["0x0000000000000000000000000000000000000099"
+            .parse()
+            .unwrap()];
         chain.update_live_signers(new_signers.clone());
 
         let updated = chain.expected_signer(0).unwrap();
@@ -539,7 +589,9 @@ mod tests {
     #[test]
     fn test_update_live_signers_is_authorized_signer() {
         let chain = PoaChainSpec::dev_chain();
-        let new_signer: Address = "0x0000000000000000000000000000000000000099".parse().unwrap();
+        let new_signer: Address = "0x0000000000000000000000000000000000000099"
+            .parse()
+            .unwrap();
 
         // Not authorized before update
         assert!(!chain.is_authorized_signer(&new_signer));
@@ -555,9 +607,9 @@ mod tests {
         let chain = PoaChainSpec::dev_chain();
         let chain_clone = chain.clone();
 
-        let new_signers: Vec<Address> = vec![
-            "0x0000000000000000000000000000000000000055".parse().unwrap(),
-        ];
+        let new_signers: Vec<Address> = vec!["0x0000000000000000000000000000000000000055"
+            .parse()
+            .unwrap()];
         chain.update_live_signers(new_signers.clone());
 
         // Clone sees the same update (shared Arc)

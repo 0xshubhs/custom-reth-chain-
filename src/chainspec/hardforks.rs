@@ -12,10 +12,19 @@ pub fn mainnet_compatible_hardforks() -> ChainHardforks {
         (EthereumHardfork::Frontier.boxed(), ForkCondition::Block(0)),
         (EthereumHardfork::Homestead.boxed(), ForkCondition::Block(0)),
         (EthereumHardfork::Tangerine.boxed(), ForkCondition::Block(0)),
-        (EthereumHardfork::SpuriousDragon.boxed(), ForkCondition::Block(0)),
+        (
+            EthereumHardfork::SpuriousDragon.boxed(),
+            ForkCondition::Block(0),
+        ),
         (EthereumHardfork::Byzantium.boxed(), ForkCondition::Block(0)),
-        (EthereumHardfork::Constantinople.boxed(), ForkCondition::Block(0)),
-        (EthereumHardfork::Petersburg.boxed(), ForkCondition::Block(0)),
+        (
+            EthereumHardfork::Constantinople.boxed(),
+            ForkCondition::Block(0),
+        ),
+        (
+            EthereumHardfork::Petersburg.boxed(),
+            ForkCondition::Block(0),
+        ),
         (EthereumHardfork::Istanbul.boxed(), ForkCondition::Block(0)),
         (EthereumHardfork::Berlin.boxed(), ForkCondition::Block(0)),
         (EthereumHardfork::London.boxed(), ForkCondition::Block(0)),
@@ -29,8 +38,17 @@ pub fn mainnet_compatible_hardforks() -> ChainHardforks {
             },
         ),
         // Timestamp-based hardforks (all at timestamp 0)
-        (EthereumHardfork::Shanghai.boxed(), ForkCondition::Timestamp(0)),
-        (EthereumHardfork::Cancun.boxed(), ForkCondition::Timestamp(0)),
-        (EthereumHardfork::Prague.boxed(), ForkCondition::Timestamp(0)),
+        (
+            EthereumHardfork::Shanghai.boxed(),
+            ForkCondition::Timestamp(0),
+        ),
+        (
+            EthereumHardfork::Cancun.boxed(),
+            ForkCondition::Timestamp(0),
+        ),
+        (
+            EthereumHardfork::Prague.boxed(),
+            ForkCondition::Timestamp(0),
+        ),
     ])
 }

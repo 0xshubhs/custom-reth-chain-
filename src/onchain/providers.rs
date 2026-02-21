@@ -1,5 +1,5 @@
-use alloy_primitives::{Address, B256, U256};
 use super::StorageReader;
+use alloy_primitives::{Address, B256, U256};
 
 /// Wraps a Reth `StateProvider` reference to implement the `StorageReader` trait.
 ///
@@ -40,7 +40,9 @@ pub struct GenesisStorageReader {
 impl GenesisStorageReader {
     /// Create a reader from a genesis configuration.
     pub fn from_genesis(genesis: &alloy_genesis::Genesis) -> Self {
-        Self { alloc: genesis.alloc.clone() }
+        Self {
+            alloc: genesis.alloc.clone(),
+        }
     }
 }
 
