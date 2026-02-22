@@ -96,7 +96,7 @@ just build-fast
 # Run in dev mode (auto-mines every 1s, 3 signers, 20 prefunded accounts)
 just dev
 
-# Run tests (303 passing)
+# Run tests (339 passing)
 just test           # with cargo update
 just test-fast      # without cargo update
 ```
@@ -124,7 +124,7 @@ Options:
   --calldata-gas <N>          Gas per non-zero calldata byte [1-16, default: 4] (4=POA, 16=mainnet)
   --block-time-ms <MS>        Sub-second block interval in ms [default: 0 = use --block-time]
                               Examples: 500 (2/s), 200 (5/s), 100 (10/s)
-  --cache-size <N>            Hot state cache entries [default: 1000]
+  --cache-size <N>            Hot state cache entries [default: 1024]
   --eager-mining              Mine immediately on tx arrival instead of interval
   --port <PORT>               P2P listener port [default: 30303]
   --bootnodes <URLs>          Comma-separated enode URLs for peer discovery
@@ -137,7 +137,7 @@ Options:
 
 ### Dev Mode (default)
 
-Auto-mines blocks every 1 second. Relaxed consensus (no signature verification). 20 prefunded accounts with 10,000 ETH each. 3 default signers loaded automatically. 300M gas limit.
+Auto-mines blocks every 1 second (default). Relaxed consensus (no signature verification). 20 prefunded accounts with 10,000 ETH each. 3 default signers loaded automatically. 300M gas limit. Use `--block-time-ms 500` for 500ms blocks, `--block-time-ms 200` for 200ms, etc.
 
 ```bash
 # Standard dev mode
@@ -166,14 +166,14 @@ cargo run --release -- --signer-key ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed
 ```
 === Meowchain POA Node ===
 Chain ID:        9323310
-Block period:    2 seconds
+Block period:    1s
 Mode:            dev
 Authorized signers (3):
   1. 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
   2. 0x70997970C51812dc3A010C7d01b50e0d17dc79C8
   3. 0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC
 ...
-  OnChain gas limit: 30000000 (from ChainConfig)
+  OnChain gas limit: 300000000 (from ChainConfig)
   OnChain signers: 3 loaded from SignerRegistry
 ...
   Block #1 - 0 txs (in-turn: 0x70997970C51812dc3A010C7d01b50e0d17dc79C8)
@@ -204,19 +204,19 @@ cargo run --release -- --production --mining --block-time 12 \
 ```
 === Meowchain POA Node ===
 Chain ID:        9323310
-Block period:    2 seconds
+Block period:    2s
 Mode:            production+mining
 Authorized signers (5):
   1. 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
   ...
 Signer key loaded: 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
 ...
-  OnChain gas limit: 60000000 (from ChainConfig)
+  OnChain gas limit: 1000000000 (from ChainConfig)
   OnChain signers: 5 loaded from SignerRegistry
 POA Consensus initialized: 5 signers, epoch: 30000, period: 2s, mode: production (strict)
 ...
-  POA block #1 signed by 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266 (out-of-turn)
-  POA block #5 signed by 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266 (in-turn)
+  OK POA block #1 signed by 0xf39Fd6... (out-of-turn, build=3ms sign=1ms)
+  OK POA block #5 signed by 0xf39Fd6... (in-turn, build=2ms sign=1ms)
 ```
 
 > **Note:** With a single signer key, blocks are "out-of-turn" except when it's that signer's round-robin slot (every Nth block where N = number of signers). In a multi-node setup, each node runs with its own key and produces blocks in-turn.
@@ -261,8 +261,8 @@ just run-custom -- --production --mining --block-time 1 --signer-key <KEY>
 | Parameter | Dev | Production |
 |-----------|-----|------------|
 | Chain ID | 9323310 | 9323310 |
-| Block time | 2s | 2s (configurable via `--block-time`) |
-| Gas limit | 30M (on-chain) | 60M (on-chain) |
+| Block time | 1s (configurable via `--block-time` / `--block-time-ms`) | 2s (configurable) |
+| Gas limit | 300M (on-chain ChainConfig) | 1B (on-chain ChainConfig) |
 | Signers | 3 (accounts 0-2) | 5 (accounts 0-4) |
 | Prefunded accounts | 20 @ 10,000 ETH | 8 (tiered allocation) |
 | Coinbase | EIP-1967 Miner Proxy | EIP-1967 Miner Proxy |
@@ -438,6 +438,81 @@ All deployed at genesis block 0. No deployment transaction needed.
 | Safe Fallback Handler | `0xf48f2B2d2a534e402487b3ee7C18c33Aec0Fe5e4` |
 | Safe MultiSend | `0xA238CBeb142c10Ef7Ad8442C6D1f9E89e07e7761` |
 
+## Performance Features (Phase 2)
+
+### Sub-Second Block Times
+
+```bash
+# 500ms blocks (2 blocks/s)
+cargo run --release -- --block-time-ms 500
+
+# 200ms blocks (5 blocks/s)
+cargo run --release -- --block-time-ms 200
+
+# 100ms blocks (10 blocks/s)
+cargo run --release -- --block-time-ms 100
+```
+
+### Gas Limit Override
+
+```bash
+# 100M gas
+cargo run --release -- --gas-limit 100000000
+
+# 300M gas (dev default)
+cargo run --release -- --gas-limit 300000000
+
+# 1B gas (production default)
+cargo run --release -- --gas-limit 1000000000
+```
+
+### Contract Size Override
+
+```bash
+# 128KB contracts (vs 24KB Ethereum default)
+cargo run --release -- --max-contract-size 131072
+
+# 512KB contracts
+cargo run --release -- --max-contract-size 524288
+```
+
+### Calldata Gas Reduction
+
+```bash
+# 4 gas/byte (default, cheap calldata)
+cargo run --release -- --calldata-gas 4
+
+# 1 gas/byte (maximum reduction)
+cargo run --release -- --calldata-gas 1
+
+# 16 gas/byte (Ethereum mainnet behaviour)
+cargo run --release -- --calldata-gas 16
+```
+
+### Metrics Output
+
+```bash
+# Print performance metrics every 10 blocks (default)
+cargo run --release -- --metrics-interval 10
+
+# Every 100 blocks
+cargo run --release -- --metrics-interval 100
+
+# Disable metrics
+cargo run --release -- --metrics-interval 0
+```
+
+**Sample metrics output:**
+```
+  [metrics] block=100 total_txs=2450 in_turn_rate=66.7%
+```
+
+**Sample block output (production mode, build+sign timing):**
+```
+  OK POA block #42 signed by 0xf39Fd6... (in-turn, build=3ms sign=1ms)
+  ~ Block #42: 5 accounts, 12 storage slots changed
+```
+
 ## Hardhat / Foundry Config
 
 ### Hardhat (`hardhat.config.ts`)
@@ -556,4 +631,4 @@ rm -rf data/
 | `RUST_LOG` | Log level: `info`, `debug`, `trace` (default: `info`) |
 | `RUST_BACKTRACE` | Enable backtraces: `1` or `full` |
 
-*Last updated: 2026-02-20 | Chain ID 9323310 | reth 1.11.0 | 224 tests passing*
+*Last updated: 2026-02-22 | Chain ID 9323310 | reth 1.11.0 | 339 tests passing*

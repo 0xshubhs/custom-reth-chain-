@@ -1,7 +1,7 @@
 # Meowchain Architecture
 
 > Comprehensive architecture documentation for the Meowchain POA blockchain built on Reth.
-> 39 Rust source files | ~9,500 lines | 303 tests | Chain ID 9323310
+> ~40 Rust source files | ~10,000 lines | 339 tests | Chain ID 9323310
 
 ---
 
@@ -114,7 +114,7 @@ graph TD
 
     LIB --> MAIN["main.rs<br/>259 lines"]
     LIB --> NODE["node/<br/>3 files, 459 lines"]
-    LIB --> EVM_MOD["evm/<br/>1 file — PoaEvmFactory + PoaExecutorBuilder"]
+    LIB --> EVM_MOD["evm/<br/>2 files — PoaEvmFactory + parallel.rs"]
     LIB --> CONS["consensus/<br/>2 files, 2,089 lines"]
     LIB --> PAY["payload/<br/>2 files, 580 lines"]
     LIB --> CHAIN["chainspec/<br/>3 files, 661 lines"]
@@ -233,20 +233,21 @@ src/
 │   ├── api.rs                (20 lines)    MeowApi trait (jsonrpsee macro)
 │   └── types.rs              (29 lines)    ChainConfigResponse, NodeInfoResponse
 │
-├── evm/                                    Custom EVM factory (Phase 2)
-│   └── mod.rs                (~120 lines)  PoaEvmFactory (patches CfgEnv), PoaExecutorBuilder
+├── evm/                                    Custom EVM factory + parallel scheduler (Phase 2)
+│   ├── mod.rs                (~200 lines)  PoaEvmFactory (patches CfgEnv), PoaExecutorBuilder, CalldataDiscountInspector
+│   └── parallel.rs           (~250 lines)  TxAccessRecord, ConflictDetector, ParallelSchedule (grevm-ready)
 │
-├── cache/                                  Hot state LRU cache (Phase 5)
-│   └── mod.rs                (~200 lines)  HotStateCache, CachedStorageReader, SharedCache
+├── cache/                                  Hot state LRU cache — wired into payload builder (Phase 5)
+│   └── mod.rs                (~600 lines)  HotStateCache, CachedStorageReader, SharedCache (16 tests)
 │
-├── statediff/                              State diff for replica sync (Phase 5)
-│   └── mod.rs                (~150 lines)  StateDiff, AccountDiff, StorageDiff
+├── statediff/                              State diff — built per block from execution_outcome() (Phase 5)
+│   └── mod.rs                (~620 lines)  StateDiff, AccountDiff, StorageSlotDiff, StateDiffBuilder (20 tests)
 │
 └── metrics/                                Performance metrics (Phase 5)
-    └── mod.rs                (~150 lines)  PhaseTimer, BlockMetrics, ChainMetrics
+    └── mod.rs                (~600 lines)  PhaseTimer, BlockMetrics, ChainMetrics (rolling window, 14 tests)
 ```
 
-**Total: ~39 files, ~9,500 lines, 303 tests**
+**Total: ~40 files, ~10,000 lines, 339 tests**
 
 ---
 

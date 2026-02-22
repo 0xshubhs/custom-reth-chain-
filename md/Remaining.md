@@ -1,6 +1,6 @@
 ### Meowchain Custom POA Chain - Status Tracker
 
-> **Last audited: 2026-02-21**
+> **Last audited: 2026-02-22**
 
 ## Table of Contents
 
@@ -31,7 +31,7 @@ Modular structure: 40 Rust files across 12 subdirectories, ~10,000 total lines, 
 
 | Module | Directory | Files | Status |
 |--------|-----------|-------|--------|
-| Entry point | `main.rs` + `cli.rs` | 2 | Working - CLI (18 args), block monitoring, colored output |
+| Entry point | `main.rs` + `cli.rs` | 2 | Working - CLI (21 args), block monitoring, colored output |
 | Node type | `node/` | 3 | Complete - PoaNode + PoaEngineValidator + PoaConsensusBuilder |
 | EVM factory | `evm/` | 2 | **NEW (Phase 2)** - PoaEvmFactory + PoaExecutorBuilder (max contract size, calldata gas); `parallel.rs` (Phase 2.13 foundation) |
 | Chain spec | `chainspec/` | 3 | Complete - hardforks, POA config, bootnodes, trait impls |
@@ -127,7 +127,7 @@ Modular structure: 40 Rust files across 12 subdirectories, ~10,000 total lines, 
 
 ### P0-ALPHA - Fundamental Architecture Problems
 
-> **Progress update (2026-02-20):** ALL P0-ALPHA items FIXED + Phase 3-4 complete. Production NodeBuilder with MDBX. PoaConsensus validates signatures using live on-chain signer list. PoaPayloadBuilder signs blocks (difficulty 1/2, epoch signers), reads gas limit from ChainConfig, refreshes signers from SignerRegistry at epoch. StateProviderStorageReader wired. Timelock contract at genesis. Bootnode CLI. Fork choice rule. 224 tests pass. Requires rustc 1.93.1+.
+> **Progress update (2026-02-22):** ALL P0-ALPHA items FIXED + Phase 2-4 complete. Production NodeBuilder with MDBX. PoaConsensus validates signatures using live on-chain signer list. PoaPayloadBuilder signs blocks (difficulty 1/2, epoch signers), reads gas limit from ChainConfig, refreshes signers from SignerRegistry at epoch. StateProviderStorageReader wired. Timelock contract at genesis. Bootnode CLI. Fork choice rule. Phase 2 performance: PoaEvmFactory (max-contract-size, calldata-gas), --block-time-ms (sub-second blocks), StateDiffBuilder, PhaseTimer metrics, block time budget warnings. 339 tests pass. Requires rustc 1.93.1+.
 
 | # | Issue | Status | What the code does now | What still needs to happen |
 |---|-------|--------|------------------------|---------------------------|
