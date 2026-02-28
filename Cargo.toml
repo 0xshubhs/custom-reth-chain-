@@ -28,6 +28,7 @@ reth-transaction-pool = { git = "https://github.com/paradigmxyz/reth", branch = 
 reth-ethereum-engine-primitives = { git = "https://github.com/paradigmxyz/reth", branch = "main" }
 reth-payload-builder-primitives = { git = "https://github.com/paradigmxyz/reth", branch = "main" }
 reth-storage-api = { git = "https://github.com/paradigmxyz/reth", branch = "main" }
+reth-rpc-server-types = { git = "https://github.com/paradigmxyz/reth", branch = "main" }
 
 # EVM factory customization (Phase 2: contract size override)
 alloy-evm = "0.27"
@@ -61,3 +62,12 @@ clap = { version = "4", features = ["derive"] }
 colored = "3"
 eyre = "0.6"
 thiserror = "2"
+
+# Keystore encryption (all already transitive deps via reth/alloy)
+aes = "0.8"
+ctr = "0.9"
+pbkdf2 = { version = "0.12", features = ["hmac"] }
+sha2 = "0.10"
+hmac = "0.12"
+uuid = { version = "1", features = ["v4"] }
+hex = "0.4"

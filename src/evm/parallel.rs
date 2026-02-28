@@ -85,7 +85,10 @@ impl AccessKey {
 
     /// Construct an `AccessKey` for a non-slot access (balance, nonce, bytecode).
     pub fn account(address: Address) -> Self {
-        Self { address, slot: B256::ZERO }
+        Self {
+            address,
+            slot: B256::ZERO,
+        }
     }
 }
 
@@ -395,10 +398,7 @@ mod tests {
     #[test]
     fn test_schedule_independent_txs_one_batch() {
         // Two txs accessing different slots: both fit in batch 0.
-        let records = vec![
-            read_only(addr(1), slot(0)),
-            read_only(addr(2), slot(1)),
-        ];
+        let records = vec![read_only(addr(1), slot(0)), read_only(addr(2), slot(1))];
         let schedule = ParallelSchedule::build(&records);
         assert_eq!(schedule.batches.len(), 1);
         assert_eq!(schedule.batches[0].len(), 2);
@@ -407,10 +407,7 @@ mod tests {
     #[test]
     fn test_schedule_conflicting_txs_two_batches() {
         // tx0 writes slot(0), tx1 reads slot(0): RAW → must be in different batches.
-        let records = vec![
-            write_only(addr(1), slot(0)),
-            read_only(addr(1), slot(0)),
-        ];
+        let records = vec![write_only(addr(1), slot(0)), read_only(addr(1), slot(0))];
         let schedule = ParallelSchedule::build(&records);
         assert_eq!(schedule.batches.len(), 2);
         assert_eq!(schedule.batches[0], vec![0]);
@@ -423,7 +420,7 @@ mod tests {
         let records = vec![
             write_only(addr(1), slot(0)), // tx0 writes slot(0)
             read_write(addr(1), slot(0)), // tx1 reads+writes slot(0) — conflicts with tx0
-            read_only(addr(1), slot(0)), // tx2 reads slot(0) — conflicts with tx1's write
+            read_only(addr(1), slot(0)),  // tx2 reads slot(0) — conflicts with tx1's write
         ];
         let schedule = ParallelSchedule::build(&records);
         assert_eq!(schedule.batches.len(), 3);

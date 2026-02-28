@@ -116,4 +116,88 @@ pub struct Cli {
     /// Set to 16 to disable the discount and match Ethereum mainnet behaviour.
     #[arg(long, default_value = "4", value_parser = clap::value_parser!(u64).range(1..=16))]
     pub calldata_gas: u64,
+
+    // ── Production-grade RPC & observability flags ────────────────────
+    /// Enable Prometheus metrics endpoint.
+    ///
+    /// Uses Reth's built-in metrics infrastructure. The endpoint is served
+    /// at `http://0.0.0.0:<metrics-port>/metrics` in Prometheus exposition format.
+    #[arg(long = "enable-metrics")]
+    pub metrics: bool,
+
+    /// Prometheus metrics listen port (requires --enable-metrics).
+    #[arg(long, default_value = "9001")]
+    pub metrics_port: u16,
+
+    /// Comma-separated list of allowed CORS origins for the HTTP RPC server.
+    ///
+    /// Use "*" to allow all origins. Default: none (no CORS headers).
+    /// Example: `--http-corsdomain "http://localhost:3000,https://app.example.com"`
+    #[arg(long)]
+    pub http_corsdomain: Option<String>,
+
+    /// Comma-separated list of HTTP RPC API modules to enable.
+    ///
+    /// Available: eth, net, web3, debug, txpool, admin, trace.
+    /// The `meow` namespace is always added automatically.
+    #[arg(long, default_value = "eth,net,web3")]
+    pub http_api: String,
+
+    /// Comma-separated list of WebSocket RPC API modules to enable.
+    ///
+    /// Available: eth, net, web3, debug, txpool, admin, trace.
+    /// The `meow` namespace is always added automatically.
+    #[arg(long, default_value = "eth,net,web3")]
+    pub ws_api: String,
+
+    /// Enable structured JSON logging instead of human-readable output.
+    ///
+    /// Useful for log aggregation systems (ELK, Loki, Datadog, etc.).
+    /// When enabled, all log output is emitted as newline-delimited JSON.
+    #[arg(long)]
+    pub log_json: bool,
+
+    /// Maximum number of concurrent RPC connections (HTTP + WS combined).
+    ///
+    /// Set to 0 for unlimited. Default matches Reth's built-in default (500).
+    #[arg(long, default_value = "500")]
+    pub rpc_max_connections: u32,
+
+    /// Maximum RPC request payload size in megabytes.
+    ///
+    /// Applies to both HTTP and WebSocket requests. Increase for large
+    /// eth_call payloads or batch requests.
+    #[arg(long, default_value = "15")]
+    pub rpc_max_request_size: u32,
+
+    /// Maximum RPC response payload size in megabytes.
+    ///
+    /// Applies to both HTTP and WebSocket responses. Increase for large
+    /// trace responses or debug_traceBlock results.
+    #[arg(long, default_value = "160")]
+    pub rpc_max_response_size: u32,
+
+    /// Enable archive mode (keep all historical state).
+    ///
+    /// By default, Reth prunes old state. Archive mode disables pruning
+    /// so all historical state is available for queries like eth_getBalance
+    /// at arbitrary block numbers, debug_traceTransaction, etc.
+    /// Warning: requires significantly more disk space.
+    #[arg(long)]
+    pub archive: bool,
+
+    /// Gas price oracle: number of recent blocks to sample for gas estimation.
+    ///
+    /// Higher values give smoother estimates but increase computation.
+    /// Used by eth_gasPrice and eth_feeHistory.
+    #[arg(long, default_value = "20")]
+    pub gpo_blocks: u32,
+
+    /// Gas price oracle: percentile of sampled gas prices to report.
+    ///
+    /// Lower values suggest cheaper (but slower) transactions,
+    /// higher values suggest faster (but more expensive) transactions.
+    /// Range: 0-100.
+    #[arg(long, default_value = "60")]
+    pub gpo_percentile: u32,
 }

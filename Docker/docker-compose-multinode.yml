@@ -1,0 +1,207 @@
+# Meowchain Multi-Node POA Network
+#
+# Launches a 3-signer + 1 RPC-only node local network for development and testing.
+#
+# Signer nodes produce blocks using --production --mining flags.
+# The RPC node syncs via P2P and serves read-only RPC to external clients.
+#
+# Usage:
+#   docker compose -f Docker/docker-compose-multinode.yml up --build
+#   docker compose -f Docker/docker-compose-multinode.yml down -v  # wipe data
+#
+# Ports:
+#   signer1: HTTP 8545, WS 8555, P2P 30303
+#   signer2: HTTP 8546, WS 8556, P2P 30304
+#   signer3: HTTP 8547, WS 8557, P2P 30305
+#   rpc:     HTTP 8548, WS 8558, P2P 30306
+
+services:
+  # ── Signer 1 (bootnode) ─────────────────────────────────────────────────
+  # All other nodes connect to signer1 as their bootnode.
+  signer1:
+    build:
+      context: ..
+      dockerfile: Docker/Dockerfile
+    container_name: meow-signer1
+    restart: unless-stopped
+    command: >
+      meowchain
+        --datadir /app/data
+        --production --mining
+        --signer-key ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+        --http-addr 0.0.0.0 --http-port 8545
+        --ws-addr 0.0.0.0 --ws-port 8555
+        --port 30303
+        --block-time 2
+    ports:
+      - "8545:8545"       # HTTP RPC
+      - "8555:8555"       # WebSocket RPC
+      - "30303:30303"     # P2P TCP
+      - "30303:30303/udp" # P2P UDP
+    volumes:
+      - signer1-data:/app/data
+    environment:
+      - RUST_LOG=info
+      - RUST_BACKTRACE=1
+    networks:
+      meow-network:
+        ipv4_address: 172.20.0.10
+    healthcheck:
+      test: >
+        curl -sf http://localhost:8545
+        -X POST -H "Content-Type: application/json"
+        -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ── Signer 2 ────────────────────────────────────────────────────────────
+  signer2:
+    build:
+      context: ..
+      dockerfile: Docker/Dockerfile
+    container_name: meow-signer2
+    restart: unless-stopped
+    depends_on:
+      signer1:
+        condition: service_healthy
+    command: >
+      meowchain
+        --datadir /app/data
+        --production --mining
+        --signer-key 59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d
+        --http-addr 0.0.0.0 --http-port 8546
+        --ws-addr 0.0.0.0 --ws-port 8556
+        --port 30304
+        --bootnodes enode://BOOTNODE_PUBKEY@172.20.0.10:30303
+        --block-time 2
+    ports:
+      - "8546:8546"       # HTTP RPC
+      - "8556:8556"       # WebSocket RPC
+      - "30304:30304"     # P2P TCP
+      - "30304:30304/udp" # P2P UDP
+    volumes:
+      - signer2-data:/app/data
+    environment:
+      - RUST_LOG=info
+      - RUST_BACKTRACE=1
+    networks:
+      meow-network:
+        ipv4_address: 172.20.0.11
+    healthcheck:
+      test: >
+        curl -sf http://localhost:8546
+        -X POST -H "Content-Type: application/json"
+        -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ── Signer 3 ────────────────────────────────────────────────────────────
+  signer3:
+    build:
+      context: ..
+      dockerfile: Docker/Dockerfile
+    container_name: meow-signer3
+    restart: unless-stopped
+    depends_on:
+      signer1:
+        condition: service_healthy
+    command: >
+      meowchain
+        --datadir /app/data
+        --production --mining
+        --signer-key 5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a
+        --http-addr 0.0.0.0 --http-port 8547
+        --ws-addr 0.0.0.0 --ws-port 8557
+        --port 30305
+        --bootnodes enode://BOOTNODE_PUBKEY@172.20.0.10:30303
+        --block-time 2
+    ports:
+      - "8547:8547"       # HTTP RPC
+      - "8557:8557"       # WebSocket RPC
+      - "30305:30305"     # P2P TCP
+      - "30305:30305/udp" # P2P UDP
+    volumes:
+      - signer3-data:/app/data
+    environment:
+      - RUST_LOG=info
+      - RUST_BACKTRACE=1
+    networks:
+      meow-network:
+        ipv4_address: 172.20.0.12
+    healthcheck:
+      test: >
+        curl -sf http://localhost:8547
+        -X POST -H "Content-Type: application/json"
+        -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ── RPC Node (non-signing, read-only) ───────────────────────────────────
+  # Syncs blocks from the signer network via P2P but does not produce blocks.
+  # Use this endpoint for dApps and external tooling.
+  rpc:
+    build:
+      context: ..
+      dockerfile: Docker/Dockerfile
+    container_name: meow-rpc
+    restart: unless-stopped
+    depends_on:
+      signer1:
+        condition: service_healthy
+    command: >
+      meowchain
+        --datadir /app/data
+        --production
+        --http-addr 0.0.0.0 --http-port 8548
+        --ws-addr 0.0.0.0 --ws-port 8558
+        --port 30306
+        --bootnodes enode://BOOTNODE_PUBKEY@172.20.0.10:30303
+    ports:
+      - "8548:8548"       # HTTP RPC
+      - "8558:8558"       # WebSocket RPC
+      - "30306:30306"     # P2P TCP
+      - "30306:30306/udp" # P2P UDP
+    volumes:
+      - rpc-data:/app/data
+    environment:
+      - RUST_LOG=info
+      - RUST_BACKTRACE=1
+    networks:
+      meow-network:
+        ipv4_address: 172.20.0.20
+    healthcheck:
+      test: >
+        curl -sf http://localhost:8548
+        -X POST -H "Content-Type: application/json"
+        -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
+# ── Volumes ───────────────────────────────────────────────────────────────
+volumes:
+  signer1-data:
+    driver: local
+  signer2-data:
+    driver: local
+  signer3-data:
+    driver: local
+  rpc-data:
+    driver: local
+
+# ── Network ───────────────────────────────────────────────────────────────
+# Static IPs on a bridge network so bootnode addresses are deterministic.
+networks:
+  meow-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+          gateway: 172.20.0.1

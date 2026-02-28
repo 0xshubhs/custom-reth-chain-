@@ -2762,6 +2762,7 @@ dependencies = [
 name = "example-custom-poa-node"
 version = "0.0.0"
 dependencies = [
+ "aes",
  "alloy-consensus",
  "alloy-eips",
  "alloy-evm",
@@ -2774,9 +2775,13 @@ dependencies = [
  "async-trait",
  "clap",
  "colored",
+ "ctr",
  "eyre",
  "futures-util",
+ "hex",
+ "hmac",
  "jsonrpsee",
+ "pbkdf2",
  "reth-basic-payload-builder",
  "reth-chainspec",
  "reth-consensus",
@@ -2792,13 +2797,16 @@ dependencies = [
  "reth-payload-builder-primitives",
  "reth-payload-primitives",
  "reth-primitives-traits",
+ "reth-rpc-server-types",
  "reth-storage-api",
  "reth-tracing",
  "reth-transaction-pool",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.18",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

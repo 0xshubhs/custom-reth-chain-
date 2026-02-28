@@ -1,0 +1,82 @@
+{
+  "name": "Meowchain",
+  "shortName": "meow",
+  "chainId": 9323310,
+  "networkId": 9323310,
+  "rpc": [
+    "http://localhost:8545"
+  ],
+  "ws": [
+    "ws://localhost:8546"
+  ],
+  "explorers": [
+    {
+      "name": "Meowchain Explorer",
+      "url": "http://localhost:4000",
+      "standard": "EIP3091"
+    }
+  ],
+  "nativeCurrency": {
+    "name": "Meow",
+    "symbol": "MEOW",
+    "decimals": 18
+  },
+  "features": [
+    { "name": "EIP155" },
+    { "name": "EIP1559" },
+    { "name": "EIP4844" }
+  ],
+  "consensus": "poa",
+  "blockTime": 1,
+  "gasLimit": {
+    "dev": 300000000,
+    "production": 1000000000
+  },
+  "epoch": 30000,
+  "contracts": {
+    "system": {
+      "minerProxy": "0x0000000000000000000000000000000000001967",
+      "beaconRoot_EIP4788": "0x000F3df6D732807Ef1319fB7B8bB8522d0Beac02",
+      "historyStorage_EIP2935": "0x0000F90827F1C53a10cb7A02335B175320002935",
+      "withdrawalRequests_EIP7002": "0x00000961Ef480Eb55e80D19ad83579A64c007002",
+      "consolidation_EIP7251": "0x0000BBdDc7CE488642fb579F8B00f3a590007251"
+    },
+    "infrastructure": {
+      "entryPoint_v07": "0x0000000071727De22E5E9d8BAf0edAc6f37da032",
+      "weth9": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+      "multicall3": "0xcA11bde05977b3631167028862bE2a173976CA11",
+      "create2Deployer": "0x4e59b44847b379578588920cA78FbF26c0B4956C",
+      "simpleAccountFactory": "0x9406Cc6185a346906296840746125a0E44976454"
+    },
+    "governance": {
+      "chainConfig": "0x00000000000000000000000000000000C04F1600",
+      "signerRegistry": "0x000000000000000000000000000000005164EB00",
+      "treasury": "0x0000000000000000000000000000000007EA5B00",
+      "timelock": "0x00000000000000000000000000000000714E4C00",
+      "governanceSafe": "0x000000000000000000000000000000006F5AFE00"
+    },
+    "gnosisSafe": {
+      "singleton_v130": "0xd9Db270c1B5E3Bd161E8c8503c55cEABeE709552",
+      "proxyFactory": "0xa6B71E26C5e0845f74c812102Ca7114b6a896AB2",
+      "fallbackHandler": "0xf48f2B2d2a534e402487b3ee7C18c33Aec0Fe5e4",
+      "multiSend": "0xA238CBeb142c10Ef7Ad8442C6D1f9E89e07e7761"
+    }
+  },
+  "devAccounts": [
+    {
+      "address": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+      "role": "signer",
+      "balance": "10000 ETH"
+    },
+    {
+      "address": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+      "role": "signer",
+      "balance": "10000 ETH"
+    },
+    {
+      "address": "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+      "role": "signer",
+      "balance": "10000 ETH"
+    }
+  ]
+}

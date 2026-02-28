@@ -1,7 +1,7 @@
 # Meowchain Architecture
 
 > Comprehensive architecture documentation for the Meowchain POA blockchain built on Reth.
-> ~40 Rust source files | ~10,000 lines | 339 tests | Chain ID 9323310
+> ~46 Rust source files | ~15,000 lines | 411 tests | Chain ID 9323310
 
 ---
 
@@ -26,6 +26,9 @@
 17. [Configuration Reference](#17-configuration-reference)
 18. [Extra Data Format](#18-extra-data-format)
 19. [Testing Architecture](#19-testing-architecture)
+20. [Keystore Module](#20-keystore-module)
+21. [Prometheus Metrics](#21-prometheus-metrics)
+22. [CI/CD Pipeline](#22-cicd-pipeline)
 
 ---
 
@@ -54,12 +57,16 @@ graph TB
         subgraph "Meowchain-Specific"
             CS["PoaChainSpec<br/>Chain Configuration"]
             SM["SignerManager<br/>Key Management"]
+            KS["KeystoreManager<br/>EIP-2335 Encrypted Keys"]
             GEN["Genesis<br/>19 Pre-deployed Contracts"]
             OC["OnChain Readers<br/>Governance Contracts"]
             RPC["MeowRpc<br/>meow_* Namespace"]
+            CRPC["CliqueRpc<br/>clique_* Namespace"]
+            ARPC["AdminRpc<br/>admin_* Namespace"]
             OUT["Output<br/>Colored Console"]
             CACHE["HotStateCache<br/>LRU SharedCache"]
             METRICS["ChainMetrics<br/>PhaseTimer, BlockMetrics"]
+            PROMREG["MetricsRegistry<br/>Prometheus Counters"]
             STATEDIFF["StateDiff<br/>Replica State Sync"]
         end
     end
@@ -68,6 +75,7 @@ graph TB
         HTTP["HTTP RPC :8545"]
         WS["WS RPC :8546"]
         P2P["P2P :30303"]
+        PROM["Prometheus :9001"]
         DB["MDBX Database"]
     end
 
@@ -85,9 +93,14 @@ graph TB
     RPC --> CS
     RPC --> SM
 
+    KS --> SM
+    CRPC --> CS
+    ARPC --> SM
+
     PN --> HTTP
     PN --> WS
     PN --> P2P
+    PROMREG --> PROM
     PN --> DB
 ```
 
@@ -121,11 +134,12 @@ graph TD
     LIB --> SIGN["signer/<br/>5 files, 601 lines"]
     LIB --> GEN["genesis/<br/>5 files, 1,523 lines"]
     LIB --> OC["onchain/<br/>6 files, 1,108 lines"]
-    LIB --> RPC_MOD["rpc/<br/>3 files, 306 lines"]
+    LIB --> RPC_MOD["rpc/<br/>7 files — meow_*, clique_*, admin_*"]
+    LIB --> KEYSTORE_MOD["keystore/<br/>1 file — KeystoreManager"]
     LIB --> CACHE_MOD["cache/<br/>1 file — HotStateCache, SharedCache"]
-    LIB --> METRICS_MOD["metrics/<br/>1 file — PhaseTimer, BlockMetrics, ChainMetrics"]
+    LIB --> METRICS_MOD["metrics/<br/>2 files — PhaseTimer, BlockMetrics, ChainMetrics, MetricsRegistry"]
     LIB --> STATEDIFF_MOD["statediff/<br/>1 file — StateDiff, AccountDiff"]
-    LIB --> CLI_MOD["cli.rs<br/>76 lines"]
+    LIB --> CLI_MOD["cli.rs<br/>175 lines"]
     LIB --> CONST["constants.rs<br/>11 lines"]
     LIB --> ERR["errors.rs<br/>2 lines"]
     LIB --> OUT["output.rs<br/>255 lines"]
@@ -181,9 +195,9 @@ graph TD
 
 ```
 src/
-├── lib.rs                    (18 lines)    Root module declarations
-├── main.rs                   (259 lines)   Entry point, CLI, node launch, block monitoring
-├── cli.rs                    (76 lines)    CLI argument definitions (clap)
+├── lib.rs                    (20 lines)    Root module declarations (18 modules)
+├── main.rs                   (310 lines)   Entry point, CLI, node launch, block monitoring, graceful shutdown
+├── cli.rs                    (175 lines)   CLI argument definitions (31 args, clap)
 ├── constants.rs              (11 lines)    Shared constants (EXTRA_VANITY, EXTRA_SEAL, etc.)
 ├── errors.rs                 (2 lines)     Re-exports PoaConsensusError + SignerError
 ├── output.rs                 (255 lines)   Colored console output (20 functions)
@@ -228,10 +242,14 @@ src/
 │   ├── selectors.rs          (24 lines)    ABI function selectors
 │   └── helpers.rs            (54 lines)    encode/decode helpers
 │
-├── rpc/                                    Custom RPC namespace
+├── rpc/                                    Custom RPC namespaces (meow_*, clique_*, admin_*)
 │   ├── mod.rs                (257 lines)   MeowRpc impl + tests
 │   ├── api.rs                (20 lines)    MeowApi trait (jsonrpsee macro)
-│   └── types.rs              (29 lines)    ChainConfigResponse, NodeInfoResponse
+│   ├── types.rs              (29 lines)    ChainConfigResponse, NodeInfoResponse
+│   ├── clique.rs             (~350 lines)  CliqueRpc (8 methods, 28 tests)
+│   ├── clique_types.rs       (~80 lines)   CliqueSnapshot, CliqueStatus, CliqueProposal
+│   ├── admin.rs              (~300 lines)  AdminRpc (5 methods + health, 24 tests)
+│   └── admin_types.rs        (~60 lines)   AdminNodeInfo, PeerInfo, HealthResponse
 │
 ├── evm/                                    Custom EVM factory + parallel scheduler (Phase 2)
 │   ├── mod.rs                (~200 lines)  PoaEvmFactory (patches CfgEnv), PoaExecutorBuilder, CalldataDiscountInspector
@@ -240,14 +258,18 @@ src/
 ├── cache/                                  Hot state LRU cache — wired into payload builder (Phase 5)
 │   └── mod.rs                (~600 lines)  HotStateCache, CachedStorageReader, SharedCache (16 tests)
 │
+├── keystore/                               EIP-2335 encrypted key storage (Phase 7)
+│   └── mod.rs                (~400 lines)  KeystoreManager (PBKDF2+AES-128-CTR, 20 tests)
+│
 ├── statediff/                              State diff — built per block from execution_outcome() (Phase 5)
 │   └── mod.rs                (~620 lines)  StateDiff, AccountDiff, StorageSlotDiff, StateDiffBuilder (20 tests)
 │
-└── metrics/                                Performance metrics (Phase 5)
-    └── mod.rs                (~600 lines)  PhaseTimer, BlockMetrics, ChainMetrics (rolling window, 14 tests)
+└── metrics/                                Performance metrics + Prometheus registry (Phase 5+7)
+    ├── mod.rs                (~600 lines)  PhaseTimer, BlockMetrics, ChainMetrics (rolling window, 14 tests)
+    └── registry.rs           (~350 lines)  MetricsRegistry (19 atomic counters, TCP HTTP Prometheus server, 16 tests)
 ```
 
-**Total: ~40 files, ~10,000 lines, 339 tests**
+**Total: ~46 files, ~15,000 lines, 411 tests**
 
 ---
 
@@ -965,7 +987,47 @@ pub fn strip_extra_data(payload: ExecutionPayload) -> (ExecutionPayload, Bytes) 
 
 ## 13. RPC Interface
 
-The `rpc/` module adds a custom `meow_*` JSON-RPC namespace alongside Ethereum's standard `eth_*`, `net_*`, `web3_*` namespaces.
+The `rpc/` module adds three custom JSON-RPC namespaces alongside Ethereum's standard `eth_*`, `net_*`, `web3_*` namespaces:
+
+- **`meow_*`** (3 methods) -- Chain configuration and node info
+- **`clique_*`** (8 methods) -- Standard Clique POA signer management
+- **`admin_*`** (5 methods) -- Node administration and health checks
+
+```mermaid
+graph TB
+    subgraph "RPC Namespaces"
+        ETH["eth_*<br/>(Reth default)"]
+        NET["net_*<br/>(Reth default)"]
+        WEB3["web3_*<br/>(Reth default)"]
+        MEOW["meow_*<br/>chainConfig, signers, nodeInfo"]
+        CLIQUE["clique_*<br/>getSigners, propose, discard,<br/>status, proposals, getSnapshot,<br/>getSignersAtHash, getSnapshotAtHash"]
+        ADMIN["admin_*<br/>nodeInfo, peers, addPeer,<br/>removePeer, health"]
+    end
+
+    subgraph "Custom Implementations"
+        MEOW_IMPL["MeowRpc<br/>src/rpc/mod.rs"]
+        CLIQUE_IMPL["CliqueRpc<br/>src/rpc/clique.rs"]
+        ADMIN_IMPL["AdminRpc<br/>src/rpc/admin.rs"]
+    end
+
+    subgraph "Shared State"
+        CS["Arc&lt;PoaChainSpec&gt;"]
+        SM["Arc&lt;SignerManager&gt;"]
+    end
+
+    MEOW --> MEOW_IMPL
+    CLIQUE --> CLIQUE_IMPL
+    ADMIN --> ADMIN_IMPL
+
+    MEOW_IMPL --> CS
+    MEOW_IMPL --> SM
+    CLIQUE_IMPL --> CS
+    ADMIN_IMPL --> SM
+
+    style MEOW fill:#7bed9f,color:#000
+    style CLIQUE fill:#70a1ff,color:#fff
+    style ADMIN fill:#ffa502,color:#fff
+```
 
 ```mermaid
 classDiagram
@@ -1279,21 +1341,28 @@ fn seal_hash(header: &Header) -> B256 {
 
 ## 19. Testing Architecture
 
-224 unit tests across 10 modules, organized by concern.
+411 unit tests across 18 modules, organized by concern.
 
 ### Test Distribution
 
 | Module | Tests | Key Test Patterns |
 |--------|-------|-------------------|
-| `consensus/mod.rs` | ~80 | Signed headers, parent validation, fork choice, 3-signer simulation, 100-block chains, signer addition/removal |
+| `consensus/mod.rs` | ~59 | Signed headers, parent validation, fork choice, 3-signer simulation, 100-block chains, signer addition/removal |
 | `onchain/mod.rs` | ~55 | MockStorage, GenesisStorageReader, slot computation, governance simulation |
-| `genesis/mod.rs` | ~30 | Contract presence, storage values, alloc counts, bytecode verification |
-| `chainspec/mod.rs` | ~25 | Round-robin, hardforks, live signers, trait delegation |
-| `signer/mod.rs` | ~20 | Sign/verify, concurrent signing, key management, dev signers |
-| `payload/mod.rs` | ~12 | Epoch extra_data format, difficulty, consensus cross-verification |
-| `node/mod.rs` | ~9 | Node creation, builder chain, strip_extra_data |
-| `rpc/mod.rs` | ~10 | Chain config, signers, node info, JSON serialization |
-| `output.rs` | 0 | (Visual output, tested by integration) |
+| `genesis/mod.rs` | ~33 | Contract presence, storage values, alloc counts, bytecode verification |
+| `rpc/clique.rs` | ~28 | getSigners, propose, discard, snapshot, status, proposals |
+| `chainspec/mod.rs` | ~27 | Round-robin, hardforks, live signers, trait delegation |
+| `evm/mod.rs` + `parallel.rs` | 41 | PoaEvmFactory, CalldataDiscountInspector, TxAccessRecord, ConflictDetector, ParallelSchedule |
+| `rpc/admin.rs` | 24 | nodeInfo, peers, addPeer, removePeer, health check |
+| `signer/mod.rs` | 21 | Sign/verify, concurrent signing, key management, dev signers |
+| `keystore/mod.rs` | 20 | create_account, import_key, decrypt_key, list_accounts, delete_account |
+| `cache/mod.rs` | 20 | HotStateCache LRU, CachedStorageReader, SharedCache |
+| `metrics/mod.rs` | 19 | PhaseTimer, BlockMetrics, ChainMetrics, SlidingWindow |
+| `payload/mod.rs` | 16 | Epoch extra_data format, difficulty, consensus cross-verification |
+| `statediff/mod.rs` | 28 | StateDiff, AccountDiff, StorageDiff, StateDiffBuilder, verify/apply |
+| `rpc/mod.rs` | 9 | Chain config, signers, node info, JSON serialization |
+| `node/mod.rs` | 8 | Node creation, builder chain, strip_extra_data |
+| `output.rs` | 4 | format_interval, budget warnings |
 | `main.rs` | 0 | (Entry point, tested by running) |
 
 ### Testing Patterns
@@ -1350,6 +1419,169 @@ for node in &nodes {
 
 ---
 
+## 20. Keystore Module
+
+The `keystore/` module (`src/keystore/mod.rs`) provides EIP-2335 compatible encrypted key storage for production signer key management.
+
+### Encryption Scheme
+
+```
+Key Derivation:  PBKDF2-HMAC-SHA256 (262144 iterations, 32-byte salt)
+Encryption:      AES-128-CTR (16-byte IV)
+MAC:             HMAC-SHA256 over ciphertext
+Storage:         JSON Keystore V3 files in <datadir>/keystore/
+```
+
+### KeystoreManager API
+
+```mermaid
+classDiagram
+    class KeystoreManager {
+        -keystore_dir: PathBuf
+        +new(datadir) KeystoreManager
+        +create_account(password) Address
+        +import_key(private_key, password) Address
+        +decrypt_key(address, password) PrivateKey
+        +list_accounts() Vec~Address~
+        +delete_account(address) Result
+        +load_into_signer_manager(password, signer_manager) Result
+    }
+
+    class SignerManager {
+        +add_signer(address, signer)
+    }
+
+    KeystoreManager --> SignerManager : loads keys into
+```
+
+### Key File Format
+
+Each key is stored as a JSON file named `UTC--<timestamp>--<address>`:
+
+```json
+{
+  "version": 3,
+  "id": "uuid",
+  "address": "f39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+  "crypto": {
+    "cipher": "aes-128-ctr",
+    "cipherparams": { "iv": "hex..." },
+    "ciphertext": "hex...",
+    "kdf": "pbkdf2",
+    "kdfparams": {
+      "dklen": 32,
+      "c": 262144,
+      "prf": "hmac-sha256",
+      "salt": "hex..."
+    },
+    "mac": "hex..."
+  }
+}
+```
+
+---
+
+## 21. Prometheus Metrics
+
+The `metrics/registry.rs` module provides a thread-safe `MetricsRegistry` with 19 atomic counters and a lightweight TCP HTTP server for Prometheus scraping.
+
+### MetricsRegistry Architecture
+
+```mermaid
+graph LR
+    subgraph "Node Components"
+        PB["PoaPayloadBuilder"]
+        PC["PoaConsensus"]
+        MON["Block Monitor"]
+        NET["Network"]
+    end
+
+    subgraph "MetricsRegistry (Arc, thread-safe)"
+        BC["blocks_produced (AtomicU64)"]
+        BIT["blocks_in_turn (AtomicU64)"]
+        BOT["blocks_out_of_turn (AtomicU64)"]
+        TX["transactions_processed (AtomicU64)"]
+        GAS["gas_used_total (AtomicU64)"]
+        PC_M["peer_count (AtomicU64)"]
+        HEAD["chain_head (AtomicU64)"]
+        MORE["... 12 more counters"]
+    end
+
+    subgraph "Prometheus"
+        HTTP["TCP HTTP :9001<br/>/metrics endpoint"]
+        PROM["Prometheus Scraper"]
+        GRAF["Grafana Dashboard"]
+    end
+
+    PB --> BC
+    PB --> BIT
+    PB --> BOT
+    MON --> TX
+    MON --> GAS
+    MON --> HEAD
+    NET --> PC_M
+
+    HTTP --> PROM
+    PROM --> GRAF
+
+    style HTTP fill:#ffa502,color:#fff
+```
+
+### Exported Metrics
+
+All metrics use the `meowchain_` prefix:
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `meowchain_blocks_produced` | Counter | Total blocks produced by this node |
+| `meowchain_blocks_in_turn` | Counter | Blocks produced in-turn |
+| `meowchain_blocks_out_of_turn` | Counter | Blocks produced out-of-turn |
+| `meowchain_transactions_processed` | Counter | Total transactions processed |
+| `meowchain_gas_used_total` | Counter | Cumulative gas used |
+| `meowchain_peer_count` | Gauge | Current number of connected peers |
+| `meowchain_chain_head` | Gauge | Latest block number |
+| `meowchain_reorgs` | Counter | Chain reorganizations detected |
+| ... | ... | 11 more counters |
+
+### Enabling Metrics
+
+```bash
+cargo run --release -- --enable-metrics --metrics-port 9001
+# Then: curl http://localhost:9001/metrics
+```
+
+---
+
+## 22. CI/CD Pipeline
+
+GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every push and pull request.
+
+### Pipeline Stages
+
+```mermaid
+graph LR
+    PUSH["Push / PR"] --> CHECK["cargo check<br/>(compile errors)"]
+    CHECK --> TEST["cargo test<br/>(411 tests)"]
+    TEST --> CLIPPY["cargo clippy<br/>(lint warnings)"]
+    CLIPPY --> FMT["cargo fmt --check<br/>(formatting)"]
+    FMT --> BUILD["cargo build --release<br/>(release binary)"]
+
+    style PUSH fill:#4a9eff,color:#fff
+    style BUILD fill:#2ed573,color:#fff
+```
+
+### Jobs
+
+| Job | Purpose | Fails on |
+|-----|---------|----------|
+| `check` | Verify compilation | Any compile error |
+| `test` | Run all 411 tests | Any test failure |
+| `clippy` | Lint for common mistakes | Any clippy warning |
+| `fmt` | Check code formatting | Any formatting diff |
+| `build-release` | Build optimized binary | Build failure |
+
+---
+
 ## Appendix: Key Reth Traits Implemented
 
 | Reth Trait | Meowchain Impl | File |
@@ -1372,3 +1604,5 @@ for node in &nodes {
 | `StorageReader` | `StateProviderStorageReader` | `src/onchain/providers.rs:19` |
 | `StorageReader` | `GenesisStorageReader` | `src/onchain/providers.rs:47` |
 | `MeowApiServer` | `MeowRpc` | `src/rpc/mod.rs:38` |
+| `CliqueApiServer` | `CliqueRpc` | `src/rpc/clique.rs` |
+| `AdminApiServer` | `AdminRpc` | `src/rpc/admin.rs` |

@@ -4,7 +4,9 @@ use example_custom_poa_node::genesis;
 use example_custom_poa_node::metrics::{BlockMetrics, ChainMetrics};
 use example_custom_poa_node::node::PoaNode;
 use example_custom_poa_node::output;
-use example_custom_poa_node::rpc::{MeowApiServer, MeowRpc}; // Reuse signer manager for RPC signing and block sealing
+use example_custom_poa_node::rpc::{
+    AdminApiServer, AdminRpc, CliqueApiServer, CliqueRpc, MeowApiServer, MeowRpc,
+};
 use example_custom_poa_node::signer::{self, SignerManager};
 use example_custom_poa_node::statediff::StateDiffBuilder;
 
@@ -16,7 +18,10 @@ use reth_db::init_db;
 use reth_ethereum::{
     node::builder::{NodeBuilder, NodeHandle},
     node::core::{
-        args::{DatadirArgs, DevArgs, NetworkArgs, RpcServerArgs},
+        args::{
+            DatadirArgs, DevArgs, GasPriceOracleArgs, MetricArgs, NetworkArgs, PruningArgs,
+            RpcServerArgs,
+        },
         node_config::NodeConfig,
     },
     provider::CanonStateSubscriptions,
@@ -24,7 +29,7 @@ use reth_ethereum::{
 };
 use reth_network_peers::TrustedPeer;
 use std::{
-    net::{IpAddr, Ipv4Addr},
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -137,15 +142,49 @@ async fn main() -> eyre::Result<()> {
         .parse()
         .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
 
-    let rpc_args = RpcServerArgs {
+    // Build RPC args with CORS, API modules, connection limits, and GPO config.
+    let mut rpc_args = RpcServerArgs {
         http: true,
         http_addr,
         http_port: cli.http_port,
         ws: true,
         ws_addr,
         ws_port: cli.ws_port,
+        // Wire RPC connection limits from CLI flags
+        rpc_max_connections: cli.rpc_max_connections.into(),
+        rpc_max_request_size: cli.rpc_max_request_size.into(),
+        rpc_max_response_size: cli.rpc_max_response_size.into(),
+        // Wire gas price oracle configuration from CLI flags
+        gas_price_oracle: GasPriceOracleArgs {
+            blocks: cli.gpo_blocks,
+            percentile: cli.gpo_percentile,
+            ..Default::default()
+        },
         ..Default::default()
     };
+
+    // Add CORS if specified via --http-corsdomain
+    if let Some(ref cors) = cli.http_corsdomain {
+        rpc_args.http_corsdomain = Some(cors.clone());
+    }
+
+    // Parse HTTP API modules from comma-separated string.
+    // Reth uses its own `RpcModuleSelection` type which parses from comma-separated strings
+    // via the CLI. We set the http_api and ws_api fields which accept Option<RpcModuleSelection>.
+    // These are the standard Reth modules; the `meow_*` namespace is added separately
+    // via `extend_rpc_modules` below.
+    if let Ok(selection) = cli
+        .http_api
+        .parse::<reth_rpc_server_types::RpcModuleSelection>()
+    {
+        rpc_args.http_api = Some(selection);
+    }
+    if let Ok(selection) = cli
+        .ws_api
+        .parse::<reth_rpc_server_types::RpcModuleSelection>()
+    {
+        rpc_args.ws_api = Some(selection);
+    }
 
     // Configure P2P network (bootnodes, port, discovery)
     let mut network_args = NetworkArgs {
@@ -166,11 +205,38 @@ async fn main() -> eyre::Result<()> {
         }
     }
 
+    // Configure Prometheus metrics endpoint if --enable-metrics is set.
+    // Reth's MetricArgs expects a SocketAddr for its `prometheus` field.
+    let metric_args = if cli.metrics {
+        MetricArgs {
+            prometheus: Some(SocketAddr::from((Ipv4Addr::UNSPECIFIED, cli.metrics_port))),
+            ..Default::default()
+        }
+    } else {
+        MetricArgs::default()
+    };
+
+    // Configure pruning: archive mode disables all pruning.
+    // When --archive is NOT set, Reth uses its default pruning behaviour.
+    let pruning_args = if cli.archive {
+        // An empty PruningArgs (default) means no pruning flags are set,
+        // which results in no pruning config (= archive behaviour).
+        PruningArgs::default()
+    } else {
+        // "full" mode prunes old state to save disk space.
+        PruningArgs {
+            full: true,
+            ..Default::default()
+        }
+    };
+
     // Build node configuration with proper data directory
     let node_config = NodeConfig::default()
         .with_dev(dev_args)
         .with_rpc(rpc_args)
         .with_network(network_args)
+        .with_metrics(metric_args)
+        .with_pruning(pruning_args)
         .with_chain(poa_chain.inner().clone())
         .with_datadir_args(DatadirArgs {
             datadir: cli.datadir.clone().into(),
@@ -213,6 +279,13 @@ async fn main() -> eyre::Result<()> {
     let rpc_chain_spec = chain_spec_arc.clone();
     let rpc_signer_manager = signer_manager.clone();
     let rpc_dev_mode = is_dev_mode;
+    let clique_chain_spec = chain_spec_arc.clone();
+    let clique_signer_manager = signer_manager.clone();
+    let admin_chain_spec = chain_spec_arc.clone();
+    let admin_signer_manager = signer_manager.clone();
+    let admin_dev_mode = is_dev_mode;
+    let admin_p2p_port = cli.port;
+    let node_start_time = std::time::Instant::now();
 
     let NodeHandle {
         node,
@@ -232,12 +305,80 @@ async fn main() -> eyre::Result<()> {
             let meow_rpc = MeowRpc::new(rpc_chain_spec, rpc_signer_manager, rpc_dev_mode);
             ctx.modules.merge_configured(meow_rpc.into_rpc())?;
             output::print_rpc_registered("meow_*");
+
+            let clique_rpc = CliqueRpc::new(clique_chain_spec, clique_signer_manager);
+            ctx.modules.merge_configured(clique_rpc.into_rpc())?;
+            output::print_rpc_registered("clique_*");
+
+            let admin_rpc = AdminRpc::new(
+                admin_chain_spec,
+                admin_signer_manager,
+                node_start_time,
+                admin_dev_mode,
+                admin_p2p_port,
+            );
+            ctx.modules.merge_configured(admin_rpc.into_rpc())?;
+            output::print_rpc_registered("admin_*");
             Ok(())
         })
         .launch_with_debug_capabilities()
         .await?;
 
     output::print_node_started(poa_chain.inner().genesis_hash());
+
+    // Print production-grade feature status after node launch
+    if cli.metrics {
+        output::print_feature(
+            "Prometheus metrics",
+            &format!("http://0.0.0.0:{}/metrics", cli.metrics_port),
+        );
+    }
+    if let Some(ref cors) = cli.http_corsdomain {
+        output::print_feature("CORS", cors);
+    }
+    output::print_info(&format!("HTTP API modules: {}", cli.http_api));
+    output::print_info(&format!("WS API modules: {}", cli.ws_api));
+    output::print_info(&format!("Max RPC connections: {}", cli.rpc_max_connections));
+    output::print_info(&format!(
+        "RPC payload limits: request={}MB response={}MB",
+        cli.rpc_max_request_size, cli.rpc_max_response_size
+    ));
+    if cli.archive {
+        output::print_feature("Archive mode", "all historical state retained");
+    }
+    output::print_info(&format!(
+        "Gas price oracle: {} blocks, {}th percentile",
+        cli.gpo_blocks, cli.gpo_percentile
+    ));
+    if cli.log_json {
+        output::print_feature("JSON logging", "structured output enabled");
+    }
+
+    // Register graceful shutdown handlers for SIGINT (Ctrl+C) and SIGTERM.
+    // These print a shutdown message before the node exits.
+    tokio::spawn(async {
+        let ctrl_c = tokio::signal::ctrl_c();
+        #[cfg(unix)]
+        {
+            let mut sigterm =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                    .expect("failed to register SIGTERM handler");
+
+            tokio::select! {
+                _ = ctrl_c => {
+                    output::print_shutdown("Received SIGINT (Ctrl+C), shutting down...");
+                }
+                _ = sigterm.recv() => {
+                    output::print_shutdown("Received SIGTERM, shutting down...");
+                }
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = ctrl_c.await;
+            output::print_shutdown("Received SIGINT (Ctrl+C), shutting down...");
+        }
+    });
 
     // Set up performance metrics (Phase 5)
     let chain_metrics = ChainMetrics::default_window();
@@ -268,10 +409,9 @@ async fn main() -> eyre::Result<()> {
             let chain = notification.committed();
             let outcome = chain.execution_outcome();
             let block_hash: B256 = block.hash();
-            let mut diff_builder =
-                StateDiffBuilder::new(block_num, block_hash)
-                    .with_gas_used(gas_used)
-                    .with_tx_count(tx_count);
+            let mut diff_builder = StateDiffBuilder::new(block_num, block_hash)
+                .with_gas_used(gas_used)
+                .with_tx_count(tx_count);
             for (addr, account) in outcome.bundle_accounts_iter() {
                 // Account-level changes: balance, nonce, code
                 match (&account.original_info, &account.info) {

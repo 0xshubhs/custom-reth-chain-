@@ -158,7 +158,10 @@ where
         ComponentsBuilder::default()
             .node_types::<N>()
             .pool(EthereumPoolBuilder::default())
-            .executor(PoaExecutorBuilder::new(self.max_contract_size, self.calldata_gas_per_byte))
+            .executor(PoaExecutorBuilder::new(
+                self.max_contract_size,
+                self.calldata_gas_per_byte,
+            ))
             .payload(BasicPayloadServiceBuilder::new(
                 PoaPayloadBuilderBuilder::new(
                     self.chain_spec.clone(),

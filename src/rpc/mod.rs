@@ -3,10 +3,17 @@
 //! Custom RPC methods for querying chain configuration, signer info,
 //! and node status. Registered as the `meow_*` namespace.
 
+pub mod admin;
+pub mod admin_types;
 pub mod api;
+pub mod clique;
+pub mod clique_types;
 pub mod types;
 
+pub use admin::{AdminApiServer, AdminRpc};
+pub use admin_types::NODE_VERSION;
 pub use api::MeowApiServer;
+pub use clique::{CliqueApiServer, CliqueRpc};
 pub use types::{ChainConfigResponse, NodeInfoResponse};
 
 use crate::chainspec::PoaChainSpec;

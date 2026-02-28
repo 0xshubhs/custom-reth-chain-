@@ -11,6 +11,7 @@ pub mod constants;
 pub mod errors;
 pub mod evm;
 pub mod genesis;
+pub mod keystore;
 pub mod metrics;
 pub mod node;
 pub mod onchain;

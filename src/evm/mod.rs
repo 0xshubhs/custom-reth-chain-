@@ -31,7 +31,9 @@ use alloy_evm::{
         context::BlockEnv,
         context_interface::result::{EVMError, HaltReason},
         inspector::NoOpInspector,
-        interpreter::{CallInput, CallInputs, CallOutcome, CreateInputs, CreateOutcome, Interpreter},
+        interpreter::{
+            CallInput, CallInputs, CallOutcome, CreateInputs, CreateOutcome, Interpreter,
+        },
         primitives::hardfork::SpecId,
         Inspector,
     },
@@ -39,14 +41,14 @@ use alloy_evm::{
 };
 use alloy_primitives::{Address, Log, U256};
 
-use reth_chainspec::EthereumHardforks;
-use reth_ethereum::node::EthEvmConfig;
-use reth_ethereum::node::builder::{components::ExecutorBuilder, BuilderContext};
-use reth_ethereum::node::api::{FullNodeTypes, NodeTypes};
-use reth_ethereum::EthPrimitives;
-use reth_ethereum_forks::Hardforks;
 use alloy_evm::eth::spec::EthExecutorSpec;
 use alloy_evm::revm::context::TxEnv;
+use reth_chainspec::EthereumHardforks;
+use reth_ethereum::node::api::{FullNodeTypes, NodeTypes};
+use reth_ethereum::node::builder::{components::ExecutorBuilder, BuilderContext};
+use reth_ethereum::node::EthEvmConfig;
+use reth_ethereum::EthPrimitives;
+use reth_ethereum_forks::Hardforks;
 
 // ─── Calldata gas discount inspector ──────────────────────────────────────────
 
@@ -329,7 +331,10 @@ mod tests {
     fn test_poa_evm_factory_sets_initcode_limit_double() {
         let factory = PoaEvmFactory::new(Some(131_072), 16); // 128 KB
         let patched = factory.patch_env(make_env());
-        assert_eq!(patched.cfg_env.limit_contract_initcode_size, Some(131_072 * 2));
+        assert_eq!(
+            patched.cfg_env.limit_contract_initcode_size,
+            Some(131_072 * 2)
+        );
     }
 
     #[test]

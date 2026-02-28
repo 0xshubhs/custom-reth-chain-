@@ -399,3 +399,205 @@ When calling async code from within a Tokio multi-threaded async context (e.g., 
 triggered by the dev miner):
 - `Handle::block_on()` → panics ("Cannot start a runtime from within a runtime")
 - `tokio::task::block_in_place(|| handle.block_on(...))` → correct approach
+
+---
+
+# Implementation Log --- 2026-02-24
+
+## Summary
+
+Phase 7: Production Infrastructure. Added Clique RPC (8 methods), Admin RPC (5 methods + health),
+encrypted keystore (EIP-2335), Prometheus metrics registry, 12 new CLI flags, graceful shutdown,
+CI/CD pipeline, Docker multi-node compose, and developer configuration files.
+
+Total: 411 tests passing, ~15,000 lines across ~46 files, 18 modules.
+
+---
+
+## 11. Phase 7: Production Infrastructure
+
+### 11.1 Clique RPC Namespace (`src/rpc/clique.rs`)
+
+Standard Clique POA RPC namespace providing 8 methods for signer management and snapshot queries.
+This follows the go-ethereum Clique API specification.
+
+**Methods implemented:**
+
+| Method | Description |
+|--------|-------------|
+| `clique_getSigners` | Returns current authorized signers |
+| `clique_getSignersAtHash` | Returns signers at a specific block hash |
+| `clique_getSnapshot` | Returns consensus snapshot (signers, votes, tally) |
+| `clique_getSnapshotAtHash` | Returns snapshot at a specific block hash |
+| `clique_propose` | Propose adding/removing a signer (bool: true=add, false=remove) |
+| `clique_discard` | Discard a pending proposal |
+| `clique_status` | Returns signing status (in-turn count, total blocks) |
+| `clique_proposals` | Returns all pending proposals |
+
+**Types** (`src/rpc/clique_types.rs`):
+- `CliqueSnapshot` -- Signers, votes, and tally at a given block
+- `CliqueStatus` -- Signing statistics
+- `CliqueProposal` -- Address + authorize flag
+
+**28 tests** covering all 8 methods, error handling, and serialization.
+
+### 11.2 Admin RPC Namespace (`src/rpc/admin.rs`)
+
+Admin RPC namespace for node management with a health check endpoint designed for load balancers.
+
+**Methods implemented:**
+
+| Method | Description | Use Case |
+|--------|-------------|----------|
+| `admin_nodeInfo` | Returns enode URL, network, protocol info | Node discovery |
+| `admin_peers` | Returns connected peer list | Network debugging |
+| `admin_addPeer` | Manually add a peer by enode URL | Network bootstrap |
+| `admin_removePeer` | Disconnect a peer | Network management |
+| `admin_health` | Health check (syncing, peer count, latest block) | Load balancer probes |
+
+**Health check design:**
+The `admin_health` endpoint is designed for HTTP load balancer health probes (e.g., AWS ALB, nginx).
+It returns a JSON response with:
+- `healthy: bool` -- Overall health status
+- `syncing: bool` -- Whether the node is currently syncing
+- `peerCount: u64` -- Number of connected peers
+- `latestBlock: u64` -- Latest block number
+
+A node is considered "healthy" when it is not syncing and has at least 1 peer (or is in dev mode).
+
+**Types** (`src/rpc/admin_types.rs`):
+- `AdminNodeInfo` -- Node identity and network information
+- `PeerInfo` -- Individual peer details
+- `HealthResponse` -- Health check response
+
+**24 tests** covering all 5 methods, health logic, and edge cases.
+
+### 11.3 Encrypted Keystore (`src/keystore/mod.rs`)
+
+EIP-2335 compatible Ethereum Keystore V3 encrypted key storage. This replaces raw hex private keys
+on the command line with proper encrypted storage on disk.
+
+**Encryption approach:**
+
+```
+1. Key Derivation:
+   - Algorithm: PBKDF2-HMAC-SHA256
+   - Iterations: 262,144 (c=262144)
+   - Salt: 32 random bytes
+   - Derived key length: 32 bytes (dklen=32)
+
+2. Encryption:
+   - Algorithm: AES-128-CTR
+   - Key: first 16 bytes of derived key
+   - IV: 16 random bytes
+   - Plaintext: 32-byte private key
+
+3. MAC:
+   - Algorithm: HMAC-SHA256
+   - Key: last 16 bytes of derived key
+   - Data: ciphertext
+   - Used for integrity verification on decrypt
+```
+
+**File storage:** Keys are stored as JSON files in `<datadir>/keystore/` with filenames like
+`UTC--2026-02-24T12-00-00Z--<address>`.
+
+**KeystoreManager methods:**
+- `create_account(password)` -- Generate new random key, encrypt, store, return address
+- `import_key(private_key, password)` -- Encrypt existing key and store
+- `decrypt_key(address, password)` -- Load file, derive key, verify MAC, decrypt
+- `list_accounts()` -- List all stored addresses from filenames
+- `delete_account(address)` -- Remove encrypted key file
+- `load_into_signer_manager(password, signer_manager)` -- Decrypt all and load into runtime
+
+**20 tests** covering create, import, decrypt, list, delete, wrong password, and SignerManager integration.
+
+### 11.4 Prometheus Metrics Registry (`src/metrics/registry.rs`)
+
+Thread-safe metrics registry with 19 atomic counters and a lightweight TCP HTTP server for
+Prometheus scraping. Uses `AtomicU64` for lock-free counter increments.
+
+**Design decisions:**
+- **No external metrics crate dependency** -- Uses `std::sync::atomic::AtomicU64` directly for
+  zero-overhead counters. The Prometheus exposition format is simple enough to generate manually.
+- **Lightweight TCP HTTP server** -- Spawns a single tokio task that listens on `--metrics-port`
+  (default 9001). Only responds to `GET /metrics`. No TLS (intended to be behind a firewall).
+- **Thread-safe** -- `MetricsRegistry` is `Arc`-wrapped and shared across all components.
+  Each counter uses `AtomicU64::fetch_add(1, Ordering::Relaxed)` for lock-free increments.
+
+**Metrics exported** (all prefixed with `meowchain_`):
+- Block production: `blocks_produced`, `blocks_in_turn`, `blocks_out_of_turn`
+- Transactions: `transactions_processed`, `gas_used_total`
+- Network: `peer_count`, `peer_connections`, `peer_disconnections`
+- Chain: `chain_head`, `reorgs`, `forks_detected`
+- EVM: `evm_executions`, `evm_errors`
+- Payload: `payload_builds`, `payload_signs`, `payload_failures`
+- Consensus: `consensus_validations`, `consensus_rejections`
+- Cache: `cache_hits`, `cache_misses`
+
+**16 tests** covering counter increments, Prometheus output format, and server lifecycle.
+
+### 11.5 Production CLI Flags
+
+12 new CLI flags added (31 total), all in `src/cli.rs`:
+
+| Flag | Type | Default | Purpose |
+|------|------|---------|---------|
+| `--enable-metrics` | bool | false | Enable Prometheus HTTP server |
+| `--metrics-port` | u16 | 9001 | Port for Prometheus scraping |
+| `--http-corsdomain` | Option | -- | CORS allowed origins for HTTP RPC |
+| `--http-api` | Option | -- | HTTP RPC namespace filter |
+| `--ws-api` | Option | -- | WS RPC namespace filter |
+| `--log-json` | bool | false | Structured JSON log output |
+| `--rpc-max-connections` | u32 | 100 | Max concurrent RPC connections |
+| `--rpc-max-request-size` | u32 | 15 | Max request size (MB) |
+| `--rpc-max-response-size` | u32 | 150 | Max response size (MB) |
+| `--archive` | bool | false | Archive mode (no pruning) |
+| `--gpo-blocks` | u64 | 20 | Gas price oracle sample blocks |
+| `--gpo-percentile` | u64 | 60 | Gas price oracle percentile |
+
+### 11.6 Graceful Shutdown
+
+SIGINT and SIGTERM signal handlers added in `main.rs`. On signal receipt:
+1. Log shutdown message
+2. Cancel the node exit future
+3. Flush MDBX database
+4. Close RPC server
+5. Disconnect peers
+6. Exit with code 0
+
+### 11.7 CI/CD Pipeline
+
+GitHub Actions workflow (`.github/workflows/ci.yml`):
+
+| Job | Command | Purpose |
+|-----|---------|---------|
+| check | `cargo check` | Verify compilation |
+| test | `cargo test` | Run 411 tests |
+| clippy | `cargo clippy -- -D warnings` | Zero-warning policy |
+| fmt | `cargo fmt --check` | Formatting consistency |
+| build-release | `cargo build --release` | Ensure release build works |
+
+Triggers: push to `main`, all pull requests.
+
+### 11.8 Docker Multi-Node
+
+`Docker/docker-compose-multinode.yml` defines a 4-node network:
+
+| Service | Role | HTTP Port | P2P Port | Signer |
+|---------|------|-----------|----------|--------|
+| signer1 | Block producer | 8545 | 30303 | Account 0 |
+| signer2 | Block producer | 8547 | 30304 | Account 1 |
+| signer3 | Block producer | 8549 | 30305 | Account 2 |
+| rpc | Read-only node | 8551 | 30306 | None |
+
+All nodes share the same genesis and connect via bootnode discovery.
+
+### 11.9 Developer Configs
+
+| File | Purpose |
+|------|---------|
+| `configs/hardhat.config.js` | Hardhat network configuration with Meowchain RPC + dev key |
+| `configs/foundry.toml` | Foundry profile with chain RPC and chain ID |
+| `configs/networks.json` | Network registry (chain ID, RPC URLs, explorer URL) |
+| `configs/grafana-meowchain.json` | Grafana dashboard template (import with Prometheus data source) |

@@ -1,4 +1,4 @@
-use crate::cache::{CachedStorageReader, CacheConfig, HotStateCache, SharedCache};
+use crate::cache::{CacheConfig, CachedStorageReader, HotStateCache, SharedCache};
 use crate::chainspec::PoaChainSpec;
 use crate::consensus::{EXTRA_SEAL_LENGTH, EXTRA_VANITY_LENGTH};
 use crate::onchain::{read_gas_limit, read_signer_list, StateProviderStorageReader};
@@ -84,8 +84,7 @@ where
 
         // Create the shared hot state cache (Phase 5.31).
         // Startup reads populate the cache; subsequent epoch reads re-use it.
-        let cache: SharedCache =
-            Arc::new(Mutex::new(HotStateCache::new(self.cache_size)));
+        let cache: SharedCache = Arc::new(Mutex::new(HotStateCache::new(self.cache_size)));
 
         // Read gas limit from on-chain ChainConfig contract (Phase 3: item 20).
         // Falls back to CLI/genesis default if the contract isn't readable yet.

@@ -21,7 +21,7 @@ pub fn format_interval(d: Duration) -> String {
     let ms = d.as_millis();
     if ms < 1000 {
         format!("{ms}ms")
-    } else if ms % 1000 == 0 {
+    } else if ms.is_multiple_of(1000) {
         format!("{}s", d.as_secs())
     } else {
         format!("{:.1}s", d.as_secs_f64())
@@ -363,6 +363,29 @@ pub fn print_block_time_budget_warning(block_num: u64, elapsed_ms: u64, interval
         elapsed_ms.to_string().yellow(),
         interval_ms.to_string().dimmed(),
         elapsed_ms as f64 / interval_ms as f64 * 100.0,
+    );
+}
+
+// ── Shutdown & Info ──────────────────────────────────────────────────
+
+/// Print a shutdown message with the reason.
+pub fn print_shutdown(reason: &str) {
+    println!();
+    println!("  {} {}", "SHUTDOWN".yellow().bold(), reason.yellow(),);
+}
+
+/// Print a generic informational message.
+pub fn print_info(msg: &str) {
+    println!("  {} {}", "INFO".blue().bold(), msg,);
+}
+
+/// Print that a feature was enabled, with a detail string.
+pub fn print_feature(name: &str, detail: &str) {
+    println!(
+        "  {} {}: {}",
+        "OK".green().bold(),
+        name.cyan(),
+        detail.dimmed(),
     );
 }
 

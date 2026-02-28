@@ -491,8 +491,7 @@ mod tests {
     async fn test_payload_builder_builder_custom_cache_size() {
         let chain = Arc::new(PoaChainSpec::dev_chain());
         let manager = Arc::new(SignerManager::new());
-        let builder =
-            PoaPayloadBuilderBuilder::new(chain, manager, true).with_cache_size(512);
+        let builder = PoaPayloadBuilderBuilder::new(chain, manager, true).with_cache_size(512);
         assert_eq!(builder.cache_size, 512);
     }
 

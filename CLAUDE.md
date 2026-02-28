@@ -26,25 +26,27 @@ Current State:
     ├── Hardforks: Frontier through Prague (all active at genesis)
     ├── Metrics: PhaseTimer (build + sign timing in payload builder), BlockMetrics, ChainMetrics (rolling window)
     ├── StateDiff: StateDiffBuilder wired in main.rs — builds StateDiff from execution_outcome() per block
-    ├── RPC: HTTP (8545) + WS (8546) + meow_* namespace on 0.0.0.0
+    ├── RPC: HTTP (8545) + WS (8546) + meow_*/clique_*/admin_* namespaces on 0.0.0.0
+    ├── Keystore: EIP-2335 encrypted key storage (PBKDF2-HMAC-SHA256 + AES-128-CTR)
+    ├── Prometheus: MetricsRegistry with 19 atomic counters + TCP HTTP server for scraping
     ├── P2P: Configurable bootnodes, port, discovery (--port, --bootnodes, --disable-discovery)
+    ├── CI/CD: GitHub Actions (check, test, clippy, fmt, build-release)
     └── Storage: MDBX persistent database (production NodeBuilder)
 
 Target State (MegaETH-inspired, remaining):
   meowchain (PoaNode)
     ├── EVM: Parallel execution (grevm, when on crates.io) + JIT (revmc)  ← NEXT
-    ├── RPC: HTTP + WS + admin_*/meow_* namespaces
     └── Storage: async trie hashing, state-diff streaming to replicas
 ```
 
 ## Source Files
 
-The `src/` directory uses a modular structure with **~40 Rust files** across **12 subdirectories** and **16 modules**:
+The `src/` directory uses a modular structure with **~46 Rust files** across **13 subdirectories** and **18 modules**:
 
 | Module | Directory | Key Types | Tests |
 |--------|-----------|-----------|-------|
 | Entry point | `src/main.rs` | — | — |
-| CLI | `src/cli.rs` | `Cli` (19 args) | — |
+| CLI | `src/cli.rs` | `Cli` (31 args) | — |
 | Node | `src/node/` | `PoaNode`, `PoaEngineValidator`, `PoaConsensusBuilder` | 8 |
 | EVM | `src/evm/` | `PoaEvmFactory`, `PoaExecutorBuilder`, `CalldataDiscountInspector`, `ParallelSchedule` | 28 |
 | Consensus | `src/consensus/` | `PoaConsensus`, `PoaConsensusError` | 59 |
@@ -52,24 +54,27 @@ The `src/` directory uses a modular structure with **~40 Rust files** across **1
 | Genesis | `src/genesis/` | `GenesisConfig`, `create_genesis()` | 33 |
 | Payload | `src/payload/` | `PoaPayloadBuilder`, `PoaPayloadBuilderBuilder` | 16 |
 | On-chain | `src/onchain/` | `StorageReader`, `StateProviderStorageReader` | 55 |
-| RPC | `src/rpc/` | `MeowRpc`, `MeowApiServer` | 9 |
+| RPC (meow) | `src/rpc/` | `MeowRpc`, `MeowApiServer` | 9 |
+| RPC (clique) | `src/rpc/` | `CliqueRpc`, `CliqueApiServer` | 28 |
+| RPC (admin) | `src/rpc/` | `AdminRpc`, `AdminApiServer` | 24 |
 | Signer | `src/signer/` | `SignerManager`, `BlockSealer` | 21 |
+| Keystore | `src/keystore/` | `KeystoreManager` | 20 |
 | Cache | `src/cache/` | `HotStateCache`, `CachedStorageReader`, `SharedCache` | 20+ |
 | State diff | `src/statediff/` | `StateDiff`, `AccountDiff`, `StorageDiff` | 10+ |
-| Metrics | `src/metrics/` | `PhaseTimer`, `BlockMetrics`, `ChainMetrics` | 10+ |
+| Metrics | `src/metrics/` | `PhaseTimer`, `BlockMetrics`, `ChainMetrics`, `MetricsRegistry` | 26+ |
 | Output | `src/output.rs` | Colored console output + `format_interval()`, `print_block_state_diff()`, `print_block_time_budget_warning()` | 4 |
 | Shared | `src/{lib,constants,errors}.rs` | Module root + constants + re-exports | — |
 | Bytecodes | `src/bytecodes/` | Pre-compiled contract bytecodes (.bin/.hex, 13 contracts) | — |
 
-**Total: ~10,000 lines Rust across ~40 files, 339 tests passing (2026-02-22)**
+**Total: ~15,000 lines Rust across ~46 files, 411 tests passing (2026-02-24)**
 
 ### File-Level Breakdown
 
 ```
 src/
-├── lib.rs                  (18)   Module declarations
-├── main.rs                (259)   Entry point, CLI, node launch, block monitoring
-├── cli.rs                  (110)  CLI argument definitions (19 args incl. --max-contract-size, --calldata-gas, --cache-size)
+├── lib.rs                  (20)   Module declarations (18 modules)
+├── main.rs                (310)   Entry point, CLI, node launch, block monitoring, graceful shutdown
+├── cli.rs                  (175)  CLI argument definitions (31 args incl. --enable-metrics, --http-corsdomain, --archive)
 ├── constants.rs            (11)   EXTRA_VANITY_LENGTH, EXTRA_SEAL_LENGTH, etc.
 ├── errors.rs                (2)   Re-exports
 ├── output.rs              (255)   20 colored console output functions
@@ -106,19 +111,26 @@ src/
 ├── rpc/
 │   ├── mod.rs             (257)   MeowRpc impl + 9 tests
 │   ├── api.rs              (20)   MeowApi #[rpc] trait definition
-│   └── types.rs            (29)   ChainConfigResponse, NodeInfoResponse
+│   ├── types.rs            (29)   ChainConfigResponse, NodeInfoResponse
+│   ├── clique.rs          (~350)  CliqueRpc impl (8 methods: getSigners, propose, discard, status, etc.) + 28 tests
+│   ├── clique_types.rs    (~80)   CliqueSnapshot, CliqueStatus, CliqueProposal types
+│   ├── admin.rs           (~300)  AdminRpc impl (5 methods: nodeInfo, peers, addPeer, removePeer, health) + 24 tests
+│   └── admin_types.rs     (~60)   AdminNodeInfo, PeerInfo, HealthResponse types
 ├── signer/
 │   ├── mod.rs             (363)   Integration tests (21 tests)
 │   ├── manager.rs          (77)   SignerManager (RwLock<HashMap<Address, PrivateKeySigner>>)
 │   ├── sealer.rs          (103)   BlockSealer (seal_header, verify_signature)
 │   ├── errors.rs           (18)   SignerError (3 variants)
 │   └── dev.rs              (40)   DEV_PRIVATE_KEYS (20 deterministic keys)
+├── keystore/
+│   └── mod.rs             (~400)  KeystoreManager (EIP-2335: PBKDF2-HMAC-SHA256 + AES-128-CTR) + 20 tests
 ├── cache/
 │   └── mod.rs             (~200)  HotStateCache (LRU), CachedStorageReader<R>, SharedCache type alias
 ├── statediff/
 │   └── mod.rs             (~150)  StateDiff, AccountDiff, StorageDiff (replica state streaming)
 ├── metrics/
-│   └── mod.rs             (~150)  PhaseTimer (RAII), BlockMetrics, ChainMetrics (rolling window)
+│   ├── mod.rs             (~150)  PhaseTimer (RAII), BlockMetrics, ChainMetrics (rolling window)
+│   └── registry.rs        (~350)  MetricsRegistry (19 atomic counters) + TCP HTTP Prometheus server + 16 tests
 └── bytecodes/                     26 files (.bin/.hex for 13 contracts)
 ```
 
@@ -127,7 +139,7 @@ src/
 | File | Lines | Purpose |
 |------|-------|---------|
 | `CLAUDE.md` | — | Project instructions, architecture, status (this file) |
-| `md/Architecture.md` | 1,348 | Comprehensive architecture doc with 12+ Mermaid diagrams covering all 12 modules |
+| `md/Architecture.md` | 1,500+ | Comprehensive architecture doc with 14+ Mermaid diagrams covering all 18 modules |
 | `md/Remaining.md` | 1,598 | Detailed roadmap with remaining phases and implementation plans |
 | `md/USAGE.md` | 544 | User-facing usage guide (CLI, RPC, Docker, deployment) |
 | `md/Implementation.md` | 401 | Implementation notes and design decisions |
@@ -151,6 +163,10 @@ src/
 - `GenesisStorageReader` → `src/onchain/providers.rs` - reads genesis alloc (tests only)
 - `MeowRpc` → `src/rpc/mod.rs` - `meow_*` RPC namespace (chainConfig, signers, nodeInfo)
 - `MeowApi` → `src/rpc/api.rs` - `#[rpc]` trait definition
+- `CliqueRpc` → `src/rpc/clique.rs` - `clique_*` RPC namespace (getSigners, propose, discard, status, etc.)
+- `AdminRpc` → `src/rpc/admin.rs` - `admin_*` RPC namespace (nodeInfo, peers, addPeer, removePeer, health)
+- `KeystoreManager` → `src/keystore/mod.rs` - EIP-2335 encrypted key storage (PBKDF2 + AES-128-CTR)
+- `MetricsRegistry` → `src/metrics/registry.rs` - thread-safe Prometheus metrics (19 atomic counters + TCP HTTP server)
 - `PoaEvmFactory` → `src/evm/mod.rs` - wraps `EthEvmFactory`, patches `CfgEnv` (contract size + calldata gas)
 - `PoaExecutorBuilder` → `src/evm/mod.rs` - replaces `EthereumExecutorBuilder` in `PoaNode`
 - `CalldataDiscountInspector<I>` → `src/evm/mod.rs` - wraps any `Inspector<CTX>`, applies calldata discount via `Gas::erase_cost`
@@ -164,16 +180,18 @@ src/
 - `PhaseTimer` / `BlockMetrics` / `ChainMetrics` → `src/metrics/mod.rs` - perf tracking
 - Contract addresses → `src/genesis/addresses.rs` - MINER_PROXY, CHAIN_CONFIG, SIGNER_REGISTRY, TREASURY, TIMELOCK
 - `output::*` → `src/output.rs` - colored console output functions (replaces all println!)
-- `Cli` → `src/cli.rs` - clap CLI argument struct (19 args incl. --max-contract-size, --calldata-gas, --cache-size)
+- `Cli` → `src/cli.rs` - clap CLI argument struct (31 args incl. --enable-metrics, --http-corsdomain, --archive)
 - Constants → `src/constants.rs` - EXTRA_VANITY_LENGTH, EXTRA_SEAL_LENGTH, ADDRESS_LENGTH, DEFAULT_CHAIN_ID, DEFAULT_EPOCH
 
 ### External Artifacts
 
 - Genesis files: `genesis/sample-genesis.json` (dev), `genesis/production-genesis.json`
 - Solidity source: `genesis-contracts/ChainConfig.sol`, `SignerRegistry.sol`, `Treasury.sol`, `Timelock.sol`
-- Docker: `Docker/Dockerfile`, `Docker/docker-compose.yml`
+- Docker: `Docker/Dockerfile`, `Docker/docker-compose.yml`, `Docker/docker-compose-multinode.yml` (3 signer + 1 RPC)
 - Contract ABI signatures: `signatures/signatures-contracts.json`, `signatures-contracts.txt`
 - Explorer: `scoutup-go-explorer/` (Blockscout Go wrapper)
+- CI/CD: `.github/workflows/ci.yml` (check, test, clippy, fmt, build-release)
+- Developer configs: `configs/hardhat.config.js`, `configs/foundry.toml`, `configs/networks.json`, `configs/grafana-meowchain.json`
 
 ### Reth Import Conventions
 ```rust
@@ -208,7 +226,7 @@ RuntimeBuilder::new(
 - [x] External HTTP (8545) + WS (8546) RPC on 0.0.0.0
 - [x] Chain ID 9323310 everywhere
 - [x] CLI: `--gas-limit`, `--eager-mining`, `--signer-key`, `--production`, `--no-dev`, `--port`, `--bootnodes`, `--disable-discovery`, `--mining`, `--max-contract-size`, `--cache-size`, `--calldata-gas`
-- [x] 339 tests passing
+- [x] 411 tests passing
 
 ### Phase 3 — Governance (100%)
 - [x] Gnosis Safe v1.3.0 in genesis: Singleton, Proxy Factory, Fallback Handler, MultiSend
@@ -255,11 +273,23 @@ RuntimeBuilder::new(
 - [x] `print_block_signed` logs `build=Xms sign=Yms` (build timing wired in payload builder)
 - [ ] Async trie hashing, JIT (revmc), streaming block production, sub-100ms blocks
 
+### Phase 7 — Production Infrastructure (100%)
+- [x] `CliqueRpc` — standard Clique POA RPC namespace (8 methods: getSigners, getSignersAtHash, getSnapshot, getSnapshotAtHash, propose, discard, status, proposals) + 28 tests
+- [x] `AdminRpc` — admin RPC namespace (5 methods: nodeInfo, peers, addPeer, removePeer, health) + 24 tests; health check endpoint for load balancers
+- [x] `KeystoreManager` — EIP-2335 encrypted key storage using PBKDF2-HMAC-SHA256 + AES-128-CTR; methods: create_account, import_key, decrypt_key, list_accounts, delete_account, load_into_signer_manager + 20 tests
+- [x] `MetricsRegistry` — thread-safe Prometheus metrics (19 atomic counters + lightweight TCP HTTP server); exports `meowchain_*` metrics + 16 tests
+- [x] 12 new CLI flags (31 total): --enable-metrics, --metrics-port, --http-corsdomain, --http-api, --ws-api, --log-json, --rpc-max-connections, --rpc-max-request-size, --rpc-max-response-size, --archive, --gpo-blocks, --gpo-percentile
+- [x] Graceful shutdown: SIGINT/SIGTERM handlers in main.rs
+- [x] CI/CD: GitHub Actions (`.github/workflows/ci.yml`) with check, test, clippy, fmt, build-release jobs
+- [x] Docker multi-node: `Docker/docker-compose-multinode.yml` (3 signer nodes + 1 RPC node)
+- [x] Developer configs: `configs/hardhat.config.js`, `configs/foundry.toml`, `configs/networks.json`, `configs/grafana-meowchain.json`
+
 ### Codebase Quality
-- [x] Modular file structure: ~39 files across 12 subdirectories
+- [x] Modular file structure: ~46 files across 13 subdirectories
 - [x] Comprehensive architecture documentation (`md/Architecture.md`, updated)
 - [x] Zero compiler warnings, clean on rustc 1.93.1+
-- [x] 335 tests: consensus (59), onchain (55), genesis (33), chainspec (27), evm (28: 16 mod + 20 parallel + 8 from prev), cache (20+), signer (21), payload (16), statediff (10+), metrics (10+), rpc (9), node (8)
+- [x] CI/CD: GitHub Actions (check, test, clippy, fmt, build-release)
+- [x] 411 tests: consensus (59), onchain (55), genesis (33), clique RPC (28), chainspec (27), evm (28), admin RPC (24), signer (21), keystore (20), cache (20+), payload (16), metrics/registry (16), statediff (10+), metrics (10+), meow RPC (9), node (8), output (4)
 
 ### Phase 2.12-13 — Calldata Gas + Parallel Foundation (100%)
 - [x] `CalldataDiscountInspector<I>` — wraps any `Inspector<CTX>`, applies discount once per tx via `initialize_interp` + `Gas::erase_cost`; discount = `(16 - cost) × non_zero_bytes`
@@ -273,7 +303,7 @@ RuntimeBuilder::new(
 ### #1 — Performance Engineering (Phase 2, remaining)
 - Live parallel EVM via grevm (foundation done; awaiting grevm on crates.io)
 - JIT compilation (revmc)
-- Sub-second blocks (< 500ms), async trie hashing
+- Async trie hashing
 
 ### #2 — Ecosystem (Phase 6, ~15% done)
 - ERC-4337 Bundler service
@@ -306,6 +336,18 @@ RuntimeBuilder::new(
 | `--bootnodes` | `Option<Vec<String>>` | — | Comma-separated bootnode enode URLs |
 | `--disable-discovery` | `bool` | `false` | Disable P2P peer discovery |
 | `--metrics-interval` | `u64` | `0` | Print chain metrics every N blocks (0=off) |
+| `--enable-metrics` | `bool` | `false` | Enable Prometheus metrics HTTP server |
+| `--metrics-port` | `u16` | `9001` | Prometheus metrics server port |
+| `--http-corsdomain` | `Option<String>` | — | CORS allowed origins for HTTP RPC (e.g., `*` or `http://localhost:3000`) |
+| `--http-api` | `Option<String>` | — | Comma-separated HTTP RPC namespaces (e.g., `eth,net,web3,meow,clique,admin`) |
+| `--ws-api` | `Option<String>` | — | Comma-separated WS RPC namespaces |
+| `--log-json` | `bool` | `false` | Output structured JSON logs |
+| `--rpc-max-connections` | `u32` | `100` | Maximum concurrent RPC connections |
+| `--rpc-max-request-size` | `u32` | `15` | Maximum RPC request size in MB |
+| `--rpc-max-response-size` | `u32` | `150` | Maximum RPC response size in MB |
+| `--archive` | `bool` | `false` | Run as archive node (no state pruning) |
+| `--gpo-blocks` | `u64` | `20` | Gas price oracle: number of recent blocks to sample |
+| `--gpo-percentile` | `u64` | `60` | Gas price oracle: percentile for gas price estimation |
 
 ## Chain Configuration
 
@@ -375,15 +417,20 @@ just run-production --mining
 # Run tests
 just test
 
-# Docker
+# Docker (single node)
 just docker
+
+# Docker multi-node (3 signers + 1 RPC)
+just docker-multinode
 ```
 
 ## Development Notes
 
-- **303 tests**: `just test` (or `cargo test`) — unit + integration tests, runs in ~450ms
-- **Modular structure**: ~39 files across 12 subdirectories
-- **Architecture doc**: `md/Architecture.md` (1,348 lines, 12+ Mermaid diagrams) covers every module
+- **411 tests**: `just test` (or `cargo test`) — unit + integration tests
+- **Modular structure**: ~46 files across 13 subdirectories, 18 modules
+- **Architecture doc**: `md/Architecture.md` (1,500+ lines, 14+ Mermaid diagrams) covers every module
+- **3 RPC namespaces**: `meow_*` (chain info), `clique_*` (POA signer management), `admin_*` (node admin + health)
+- **CI/CD**: GitHub Actions runs check, test, clippy, fmt, build-release on every push/PR
 - Consensus traits use `#[auto_impl::auto_impl(&, Arc)]` - `Arc<PoaConsensus>` auto-implements traits
 - `launch_with_debug_capabilities()` requires `DebugNode` impl (in `src/node/mod.rs`)
 - Dev mode: auto-mines blocks, relaxed consensus (no signature checks)
@@ -415,13 +462,14 @@ just docker
 
 See `md/Remaining.md` for full details. Key remaining phases:
 
-1. **Phase 0-1** — Foundation + Connectable: **COMPLETE** (303 tests, production NodeBuilder, MDBX)
+1. **Phase 0-1** — Foundation + Connectable: **COMPLETE** (411 tests, production NodeBuilder, MDBX)
 2. **Phase 3** — Governance: **COMPLETE** (Timelock, on-chain reads, live signer cache, StateProviderStorageReader)
 3. **Phase 4** — Multi-Node: **COMPLETE** (bootnodes CLI, fork choice, state sync validation, integration tests)
-4. **Phase 2** — Performance (items 10-18 done): 1s/500ms blocks ✅, 300M/1B gas ✅, calldata gas ✅, ParallelSchedule ✅, StateDiffBuilder ✅, build timing ✅, grevm live integration **← NEXT**
-5. **Phase 5** — Advanced (~40% done): cache/statediff/metrics ✅, async trie/JIT/streaming **← NEXT**
-6. **Phase 6** — Ecosystem: ERC-4337 bundler, bridge, DEX, oracle, faucet, SDK
+4. **Phase 2** — Performance (items 10-18 done): 1s/500ms blocks, 300M/1B gas, calldata gas, ParallelSchedule, StateDiffBuilder, build timing; grevm live integration **<-- NEXT**
+5. **Phase 5** — Advanced (~40% done): cache/statediff/metrics done; async trie/JIT/streaming **<-- NEXT**
+6. **Phase 7** — Production Infrastructure: **COMPLETE** (Clique RPC, Admin RPC, encrypted keystore, Prometheus metrics, CI/CD, Docker multi-node, developer configs, graceful shutdown)
+7. **Phase 6** — Ecosystem: ERC-4337 bundler, bridge, DEX, oracle, faucet, SDK
 
 Target: **1-second blocks, 5K-10K TPS, full on-chain governance** (vs MegaETH's 10ms/100K TPS but single sequencer)
 
-*Last updated: 2026-02-22 | reth 1.11.0, rustc 1.93.1+, 339 tests, ~10,000 lines, ~40 files*
+*Last updated: 2026-02-24 | reth 1.11.0, rustc 1.93.1+, 411 tests, ~15,000 lines, ~46 files*
