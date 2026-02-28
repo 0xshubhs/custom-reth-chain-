@@ -317,8 +317,13 @@ async fn main() -> eyre::Result<()> {
                 admin_dev_mode,
                 admin_p2p_port,
             );
-            ctx.modules.merge_configured(admin_rpc.into_rpc())?;
-            output::print_rpc_registered("admin_*");
+            // Reth provides built-in admin_* methods (nodeInfo, peers, addPeer, removePeer).
+            // Our AdminRpc adds admin_health for load balancers. If Reth's admin_* conflicts,
+            // skip gracefully — the built-in admin namespace is already available.
+            match ctx.modules.merge_configured(admin_rpc.into_rpc()) {
+                Ok(()) => output::print_rpc_registered("admin_*"),
+                Err(_) => output::print_rpc_registered("admin_* (using Reth built-in)"),
+            }
             Ok(())
         })
         .launch_with_debug_capabilities()
